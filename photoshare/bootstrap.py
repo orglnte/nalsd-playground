@@ -19,24 +19,14 @@ from platform_api import (
     BlockType,
     Credentials,
     PlatformClient,
-    ServiceScope,
     apply_manifesto,
+    load_scope,
 )
 
 log = logging.getLogger("photoshare.bootstrap")
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
-
-
-def _build_scope() -> ServiceScope:
-    return ServiceScope(
-        service_id="photoshare",
-        allowed_blocks={
-            BlockType.TRANSACTIONAL_STORE,
-            BlockType.OBJECT_STORE,
-        },
-        max_blocks=4,
-    )
+SCOPE_FILE = Path(__file__).parent / "scope.toml"
 
 
 def bootstrap() -> tuple[PlatformClient, Credentials, Credentials | None]:
@@ -48,7 +38,7 @@ def bootstrap() -> tuple[PlatformClient, Credentials, Credentials | None]:
     """
     log.info("photoshare bootstrap: ACQUIRING phase begin")
     platform = PlatformClient(
-        service_id="photoshare", scope=_build_scope()
+        service_id="photoshare", scope=load_scope(SCOPE_FILE)
     )
 
     db = platform.acquire(

@@ -9,6 +9,7 @@ from platform_api.errors import (
     UnknownBlockError,
 )
 from platform_api.manifesto import apply_manifesto
+from platform_api.scope import load_scope
 from platform_api.types import (
     BlockSpec,
     BlockType,
@@ -27,6 +28,7 @@ __all__ = [
     "ReadinessTimeoutError",
     "UnknownBlockError",
     "apply_manifesto",
+    "load_scope",
     "BlockSpec",
     "BlockType",
     "Credentials",
