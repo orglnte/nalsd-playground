@@ -1,0 +1,31 @@
+[project]
+name = "nalsd"
+version = "0.1.0"
+description = "Runtime infrastructure-from-code prototype"
+requires-python = ">=3.11"
+dependencies = [
+    "pulumi>=3.150,<4",
+    "pulumi-docker>=4.5,<5",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "psycopg[binary]>=3.1",
+    "minio>=7.2",
+    "redis>=5.0",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["platform_api", "photoshare"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
