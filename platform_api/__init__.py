@@ -1,21 +1,26 @@
 """
-platform_api — the shared wire vocabulary.
+platform_api — the service-facing SDK + shared wire vocabulary.
 
-Both the service (via platform_client) and the daemon (platformd) import
-from here. This package intentionally holds *only* what has to be shared:
+Everything a service needs to talk to the Platform lives here:
 
-- types (BlockType, PrivilegeState, Credentials, BlockSpec, ServiceScope)
-- errors (PlatformError hierarchy)
-- protocol (bidirectional error-code mapping + credentials encoders)
-- manifesto (service-side SQL migration runner — takes Credentials, runs
-  SQL; used at bootstrap time after the transactional-store is acquired)
+- types      BlockType, PrivilegeState, Credentials, BlockSpec, ServiceScope
+- errors     PlatformError hierarchy
+- protocol   bidirectional error-code mapping + credentials encoders
+             (imported by BOTH sides: the service via Client, the
+             daemon via platformd.server)
+- manifesto  service-side SQL migration runner that runs at bootstrap
+             once the transactional-store is acquired
+- client     the UDS Client services instantiate to call the daemon
 
-The engine, blocks, and scope loader live inside platformd/ — the
-daemon owns them.
+The daemon (platformd) imports types, errors, and protocol from here
+but NEVER imports Client — that direction would be nonsense (the
+daemon is the thing Client talks to). Python does not enforce this;
+code review does.
 """
 
 from __future__ import annotations
 
+from platform_api.client import Client
 from platform_api.errors import (
     InvalidStateError,
     PlatformError,
@@ -38,6 +43,7 @@ __all__ = [
     "apply_manifesto",
     "BlockSpec",
     "BlockType",
+    "Client",
     "Credentials",
     "InvalidStateError",
     "PlatformError",

@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 
 from platform_api import BlockType, Credentials, apply_manifesto
-from platform_client import Client
+from platform_api import Client
 
 log = logging.getLogger("photoshare.bootstrap")
 
@@ -39,7 +39,7 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     """
     Run the acquire phase against platformd, then drop privileges.
 
-    Returns (platform_client, db_credentials, store_credentials).
+    Returns (client, db_credentials, store_credentials).
     store_credentials is None in v1.
     """
     log.info("photoshare bootstrap: ACQUIRING phase begin")

@@ -22,7 +22,7 @@ from minio.error import S3Error
 
 from photoshare.bootstrap import bootstrap
 from platform_api import Credentials
-from platform_client import Client
+from platform_api import Client
 
 log = logging.getLogger("photoshare.main")
 

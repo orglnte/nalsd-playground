@@ -1,5 +1,5 @@
 """
-Wire protocol vocabulary shared by platformd and platform_client.
+Wire protocol vocabulary shared by platformd and platform_api.Client.
 
 This is the single authoritative source for how PlatformError subclasses
 map to wire-level error codes (and back). Both sides import the SAME

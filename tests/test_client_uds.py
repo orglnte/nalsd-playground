@@ -1,4 +1,4 @@
-"""Tests for the platform_client UDS client against a running daemon."""
+"""Tests for platform_api.Client (UDS client) against a running daemon."""
 
 from __future__ import annotations
 
@@ -13,12 +13,12 @@ import pytest
 from platform_api import (
     BlockSpec,
     BlockType,
+    Client,
     Credentials,
     InvalidStateError,
     PrivilegeDroppedError,
     UnknownBlockError,
 )
-from platform_client import Client
 from platformd.config import load_daemon_config
 from platformd.identities import Identities
 from platformd.scope_store import ScopeStore

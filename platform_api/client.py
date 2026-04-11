@@ -1,20 +1,19 @@
 """
-platform_client — UDS client for platformd.
+platform_api.Client — UDS client for platformd.
 
 This is a thin transport-and-codec layer. It owns a socket, serialises
 JSON-RPC calls onto it, and decodes error responses back into the
-PlatformError hierarchy via the shared platform_api.protocol table.
+PlatformError hierarchy via platform_api.protocol.
 
-Crucially, the client does NOT track PrivilegeState or any other piece
+Crucially, the Client does NOT track PrivilegeState or any other piece
 of session state. The daemon is the sole authority on what calls are
 legal at any given moment; every method round-trips, and the daemon's
 answer is the answer. An earlier version of this class mirrored the
 state machine locally as a round-trip optimization; the duplication
 grew a second copy of the transition logic, a second error-code table,
-and a test (`test_daemon_rejects_acquire_after_drop_of_tampered_client`)
-whose whole purpose was to prove the local copy was not load-bearing.
-Deleting the local copy is simpler, and the trust-boundary semantics
-are unchanged.
+and a test whose whole purpose was to prove the local copy was not
+load-bearing. Deleting the local copy is simpler, and the
+trust-boundary semantics are unchanged.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from typing import Any
 from platform_api.protocol import decode_credentials, exception_for
 from platform_api.types import BlockType, Credentials
 
-log = logging.getLogger("platform_client")
+log = logging.getLogger("platform_api.client")
 
 DEFAULT_SOCKET_PATH = Path("dev-config/run/platformd.sock")
 
@@ -54,7 +53,7 @@ class Client:
         self._sock = s
         self._reader = s.makefile("rb", buffering=0)
         log.info(
-            "platform_client connected: service=%s socket=%s",
+            "client connected: service=%s socket=%s",
             self.service_id,
             self._socket_path,
         )

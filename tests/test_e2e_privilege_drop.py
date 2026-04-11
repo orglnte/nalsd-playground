@@ -1,16 +1,16 @@
 """
 End-to-end: real platformd + real PulumiDockerEngine + real Docker
-container + real platform_client UDS round-trip.
+container + real platform_api.Client UDS round-trip.
 
 This is the flagship test of the daemon-split architecture. It spins up
 a platformd.Server in a background thread with a PulumiDockerEngine as
-its engine factory, connects a platform_client.Client over a Unix
-domain socket, acquires a transactional-store block (which actually
-provisions a Postgres container via Pulumi), drops privileges, and
-asserts the daemon rejects a second acquire even though the engine is
-fully operational. The previous version of this test drove the
-in-process engine directly — so it proved nothing about the UDS trust
-boundary the split was supposed to enforce.
+its engine factory, connects a platform_api.Client over a Unix domain
+socket, acquires a transactional-store block (which actually provisions
+a Postgres container via Pulumi), drops privileges, and asserts the
+daemon rejects a second acquire even though the engine is fully
+operational. The previous version of this test drove the in-process
+engine directly — so it proved nothing about the UDS trust boundary
+the split was supposed to enforce.
 
 Skips cleanly if Docker isn't reachable. Uses a dedicated service_id
 (`e2edrop`) so it doesn't collide with photoshare state. Binds
@@ -29,8 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from platform_api import BlockType, PrivilegeDroppedError
-from platform_client import Client
+from platform_api import BlockType, Client, PrivilegeDroppedError
 from platformd.engine import PulumiDockerEngine
 from platformd.config import load_daemon_config
 from platformd.identities import Identities
