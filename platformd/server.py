@@ -90,15 +90,37 @@ class Server:
         try:
             uid = peer_uid(conn)
             service_id = self._identities.service_for_uid(uid)
-            scope = self._scope_store.get(service_id)
-        except (UnknownPeerError, ScopeNotFoundError, ValueError) as e:
+        except (UnknownPeerError, ValueError) as e:
+            log.warning("rejecting connection: %s", e)
+            _write(conn, error_response(None, e))
+            return
+
+        mode = self._config.mode_for(service_id)
+        try:
+            if mode == "record":
+                scope = None
+                recording_output = (
+                    self._config.scope_dir / f"{service_id}.recorded.toml"
+                )
+            else:
+                scope = self._scope_store.get(service_id)
+                recording_output = None
+        except (ScopeNotFoundError, ValueError) as e:
             log.warning("rejecting connection: %s", e)
             _write(conn, error_response(None, e))
             return
 
         engine = self._engine_for(service_id)
-        session = Session(service_id=service_id, scope=scope, engine=engine)
-        log.info("session start: service=%s uid=%d", service_id, uid)
+        session = Session(
+            service_id=service_id,
+            engine=engine,
+            scope=scope,
+            mode=mode,
+            recording_output=recording_output,
+        )
+        log.info(
+            "session start: service=%s uid=%d mode=%s", service_id, uid, mode
+        )
 
         f = conn.makefile("rwb", buffering=0)
         try:

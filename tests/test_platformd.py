@@ -12,19 +12,23 @@ from typing import Any
 
 import pytest
 
+import tomllib
+
 from platform_api import (
     BlockSpec,
     BlockType,
     Credentials,
     PrivilegeDroppedError,
+    QuotaExceededError,
     ServiceScope,
     UnknownBlockError,
 )
+from platform_api.scope import load_scope
 from platformd.config import load_daemon_config
 from platformd.identities import Identities, UnknownPeerError, load_identities
 from platformd.scope_store import ScopeNotFoundError, ScopeStore
 from platformd.server import Server
-from platformd.session import Session
+from platformd.session import RECORD_MAX_BLOCKS, Session
 
 
 @dataclass
@@ -223,6 +227,121 @@ def test_session_drop_blocks_subsequent_acquire() -> None:
         session.acquire(BlockType.OBJECT_STORE, name="images")
 
 
+# --- record mode ---
+
+def test_session_record_mode_requires_output_path() -> None:
+    with pytest.raises(ValueError, match="record mode requires"):
+        Session(service_id="demo", engine=FakeEngine(), mode="record")
+
+
+def test_session_record_mode_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="unknown session mode"):
+        Session(
+            service_id="demo",
+            engine=FakeEngine(),
+            scope=_scope(),
+            mode="audit",
+        )
+
+
+def test_session_record_mode_enforce_mode_still_requires_scope() -> None:
+    with pytest.raises(ValueError, match="enforce mode requires"):
+        Session(service_id="demo", engine=FakeEngine(), mode="enforce")
+
+
+def test_session_record_mode_accumulates_and_writes_on_drop(tmp_path: Path) -> None:
+    out = tmp_path / "demo.recorded.toml"
+    engine = FakeEngine()
+    session = Session(
+        service_id="demo",
+        engine=engine,
+        mode="record",
+        recording_output=out,
+    )
+    # No scope required and no BlockType restriction — record captures all.
+    session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
+    session.acquire(BlockType.OBJECT_STORE, name="images")
+    session.acquire(BlockType.EPHEMERAL_KV_CACHE, name="cache")
+    session.drop_to_scaling_only()
+
+    assert out.is_file()
+    parsed = tomllib.loads(out.read_text())
+    assert parsed["service_id"] == "demo"
+    assert set(parsed["allowed_blocks"]) == {
+        "transactional-store",
+        "object-store",
+        "ephemeral-kv-cache",
+    }
+    assert parsed["max_blocks"] == 3
+
+    # Header comments must be present so the operator knows it's a draft.
+    text = out.read_text()
+    assert "recorded by platformd" in text
+    assert "rename to demo.toml" in text
+
+
+def test_session_record_mode_writes_on_shutdown_without_drop(tmp_path: Path) -> None:
+    """A service that crashes or disconnects without dropping still leaves
+    a usable recording — the operator can see what it asked for before
+    the crash."""
+    out = tmp_path / "demo.recorded.toml"
+    session = Session(
+        service_id="demo",
+        engine=FakeEngine(),
+        mode="record",
+        recording_output=out,
+    )
+    session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
+    session.shutdown()
+
+    assert out.is_file()
+    parsed = tomllib.loads(out.read_text())
+    assert parsed["allowed_blocks"] == ["transactional-store"]
+
+
+def test_session_record_mode_no_acquires_skips_write(tmp_path: Path) -> None:
+    out = tmp_path / "demo.recorded.toml"
+    session = Session(
+        service_id="demo",
+        engine=FakeEngine(),
+        mode="record",
+        recording_output=out,
+    )
+    session.drop_to_scaling_only()
+    assert not out.exists()
+
+
+def test_session_record_mode_ceiling_enforced(tmp_path: Path) -> None:
+    """Record mode still has a hard ceiling so a runaway service cannot
+    drive arbitrary resource usage just because an operator opted in."""
+    out = tmp_path / "demo.recorded.toml"
+    session = Session(
+        service_id="demo",
+        engine=FakeEngine(),
+        mode="record",
+        recording_output=out,
+    )
+    for i in range(RECORD_MAX_BLOCKS):
+        session.acquire(BlockType.TRANSACTIONAL_STORE, name=f"db{i}", database="d")
+    with pytest.raises(QuotaExceededError, match="record-mode ceiling"):
+        session.acquire(BlockType.TRANSACTIONAL_STORE, name="one-too-many")
+
+
+def test_recorded_file_does_not_auto_load_as_scope(tmp_path: Path) -> None:
+    """Even if the daemon writes photoshare.recorded.toml into the scope
+    directory, ScopeStore must not pick it up. Promotion is explicit:
+    operator renames it to photoshare.toml."""
+    scope_dir = tmp_path / "scopes"
+    scope_dir.mkdir()
+    (scope_dir / "photoshare.recorded.toml").write_text(
+        'service_id = "photoshare"\n'
+        'allowed_blocks = ["transactional-store"]\n'
+    )
+    store = ScopeStore(scope_dir=scope_dir)
+    with pytest.raises(ScopeNotFoundError):
+        store.get("photoshare")
+
+
 # --- server end-to-end over a real UDS, with a fake engine ---
 
 class _ClientConn:
@@ -354,3 +473,111 @@ def test_server_privilege_drop_is_per_connection(running_server) -> None:
         conn2.close()
     assert "error" not in resp, resp
     assert resp["result"]["name"] == "images"
+
+
+@pytest.fixture
+def recording_server(tmp_path: Path):
+    """Daemon in record mode for service 'demo' — NO scope file on disk."""
+    short_sock = Path(f"/tmp/nalsd-ptd-rec-{uuid.uuid4().hex[:8]}.sock")
+
+    scope_dir = tmp_path / "scopes"
+    scope_dir.mkdir()
+    # Intentionally no demo.toml — record mode must not need one.
+
+    cfg_path = tmp_path / "platformd.toml"
+    cfg_path.write_text(
+        f'socket_path = "{short_sock}"\n'
+        f'scope_dir = "scopes"\n'
+        f'identities_path = "identities.toml"\n'
+        "\n[service.demo]\nmode = \"record\"\n"
+    )
+    (tmp_path / "identities.toml").write_text(
+        f'[[identities]]\nuid = {os.getuid()}\nservice_id = "demo"\n'
+    )
+
+    config = load_daemon_config(cfg_path)
+    identities = Identities(by_uid={os.getuid(): "demo"})
+    store = ScopeStore(scope_dir=config.scope_dir)
+    engines: dict[str, FakeEngine] = {}
+
+    def factory(service_id: str) -> FakeEngine:
+        engines.setdefault(service_id, FakeEngine())
+        return engines[service_id]
+
+    server = Server(
+        config=config,
+        identities=identities,
+        scope_store=store,
+        engine_factory=factory,
+    )
+    server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield config.socket_path, scope_dir, engines
+    finally:
+        server.stop()
+        thread.join(timeout=2)
+
+
+def test_server_record_mode_end_to_end(recording_server) -> None:
+    """Full loop: mode=record, no scope file, service connects, acquires
+    blocks that would normally require a scope, drops — daemon writes
+    demo.recorded.toml next to where the enforced scope would live."""
+    sock_path, scope_dir, engines = recording_server
+    conn = _ClientConn(sock_path)
+    try:
+        r1 = conn.call(
+            "Acquire",
+            {"block_type": "transactional-store", "name": "db"},
+        )
+        r2 = conn.call(
+            "Acquire",
+            {"block_type": "ephemeral-kv-cache", "name": "cache"},
+        )
+        r3 = conn.call("DropToScalingOnly")
+    finally:
+        conn.close()
+
+    assert "error" not in r1, r1
+    assert "error" not in r2, r2
+    assert "error" not in r3, r3
+
+    recorded = scope_dir / "demo.recorded.toml"
+    assert recorded.is_file(), "daemon must write recorded scope on drop"
+
+    # Parses as valid TOML and captures what the service actually did.
+    parsed = tomllib.loads(recorded.read_text())
+    assert parsed["service_id"] == "demo"
+    assert set(parsed["allowed_blocks"]) == {
+        "transactional-store",
+        "ephemeral-kv-cache",
+    }
+    assert parsed["max_blocks"] == 2
+
+    # The recorded file must be loadable as a ServiceScope — promotion
+    # is just a rename operation.
+    promoted = scope_dir / "demo.toml"
+    promoted.write_text(recorded.read_text())
+    scope = load_scope(promoted)
+    assert scope.service_id == "demo"
+    assert BlockType.TRANSACTIONAL_STORE in scope.allowed_blocks
+    assert BlockType.EPHEMERAL_KV_CACHE in scope.allowed_blocks
+
+
+def test_server_record_mode_then_promote_flow(recording_server) -> None:
+    """After a recording run, the daemon session ends. Renaming the
+    .recorded file to .toml and reconnecting should work — except this
+    server is still configured with mode=record so it would still record.
+    This test captures the scope-load step only."""
+    sock_path, scope_dir, _ = recording_server
+    conn = _ClientConn(sock_path)
+    try:
+        conn.call("Acquire", {"block_type": "object-store", "name": "images"})
+        conn.call("DropToScalingOnly")
+    finally:
+        conn.close()
+
+    recorded = scope_dir / "demo.recorded.toml"
+    parsed = tomllib.loads(recorded.read_text())
+    assert parsed["allowed_blocks"] == ["object-store"]
