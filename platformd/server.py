@@ -7,7 +7,7 @@ import socket
 from pathlib import Path
 from typing import Any, Callable
 
-from platform_engine.engine_protocol import Engine
+from platformd.engine_protocol import Engine
 from platform_api.errors import PlatformError
 from platform_api.protocol import (
     encode_credentials,
@@ -189,7 +189,7 @@ def _write(conn: socket.socket, obj: dict[str, Any]) -> None:
 
 
 def default_engine_factory(service_id: str) -> Engine:
-    from platform_engine.engine import PulumiDockerEngine
+    from platformd.engine import PulumiDockerEngine
 
     return PulumiDockerEngine(service_id=service_id)
 

@@ -23,7 +23,7 @@ from platform_api import (
     ServiceScope,
     UnknownBlockError,
 )
-from platform_engine.scope import load_scope
+from platformd.scope_loader import load_scope
 from platformd.config import load_daemon_config
 from platformd.identities import Identities, UnknownPeerError, load_identities
 from platformd.scope_store import ScopeNotFoundError, ScopeStore

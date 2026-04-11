@@ -18,9 +18,9 @@ from typing import Any
 
 from platform_api.errors import ProvisioningError, ReadinessTimeoutError
 from platform_api.types import BlockSpec, BlockType, Credentials
-from platform_engine.blocks import BackendConfig, backend_for
+from platformd.blocks import BackendConfig, backend_for
 
-log = logging.getLogger("platform_engine.engine")
+log = logging.getLogger("platformd.engine")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PULUMI_BIN = REPO_ROOT / ".pulumi" / "bin"

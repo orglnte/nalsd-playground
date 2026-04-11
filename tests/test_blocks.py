@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from platform_engine.blocks import DEFAULT_HOST_PORTS, backend_for
+from platformd.blocks import DEFAULT_HOST_PORTS, backend_for
 from platform_api.types import BlockSpec, BlockType
 
 

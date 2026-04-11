@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from platform_engine.scope import load_scope
+from platformd.scope_loader import load_scope
 from platform_api.types import ServiceScope
 
 

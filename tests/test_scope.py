@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from platform_api import BlockType, ServiceScope
-from platform_engine import load_scope
+from platformd.scope_loader import load_scope
 
 
 def _write(tmp_path: Path, body: str) -> Path:

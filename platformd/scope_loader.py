@@ -1,10 +1,11 @@
 """
-ServiceScope loader.
+ServiceScope TOML loader — used by platformd.scope_store.
 
-Parses a per-service TOML file into a ServiceScope value object. This is
-the seam that moves the authorization declaration out of service Python
-code and into a file the platform-ops team owns — a prerequisite for the
-daemon split (which will own this loader on behalf of services).
+The authorization declaration for a service lives in a TOML file the
+platform-ops team owns (dev-config/scopes/<service_id>.toml); this
+module parses one such file into a ServiceScope value object. The
+loader is daemon-side only — services never read scope files, because
+the daemon looks them up by authenticated service_id.
 
 Schema:
 

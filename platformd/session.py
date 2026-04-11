@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from platform_engine.engine_protocol import Engine
+from platformd.engine_protocol import Engine
 from platform_api.errors import (
     InvalidStateError,
     PrivilegeDroppedError,

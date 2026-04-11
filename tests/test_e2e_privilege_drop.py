@@ -31,7 +31,7 @@ import pytest
 
 from platform_api import BlockType, PrivilegeDroppedError
 from platform_client import Client
-from platform_engine.engine import PulumiDockerEngine
+from platformd.engine import PulumiDockerEngine
 from platformd.config import load_daemon_config
 from platformd.identities import Identities
 from platformd.scope_store import ScopeStore

@@ -10,8 +10,8 @@ from here. This package intentionally holds *only* what has to be shared:
 - manifesto (service-side SQL migration runner — takes Credentials, runs
   SQL; used at bootstrap time after the transactional-store is acquired)
 
-The engine, blocks, and scope loader live in platform_engine/ — only
-the daemon imports those.
+The engine, blocks, and scope loader live inside platformd/ — the
+daemon owns them.
 """
 
 from __future__ import annotations
