@@ -111,8 +111,15 @@ class PulumiDockerEngine:
         except Exception as e:
             raise ProvisioningError(f"failed to create/select stack: {e}") from e
 
+        # refresh=True reconciles Pulumi state against the real Docker
+        # daemon before planning, so containers deleted out-of-band
+        # (docker rm, Docker Desktop restart, machine reboot that wiped
+        # non-persistent state) are detected as missing and re-created.
+        # Without this, the engine would plan against a stale view and the
+        # subsequent readiness poll would time out against a non-existent
+        # container.
         try:
-            stack.up(on_output=self._log_pulumi)
+            stack.up(on_output=self._log_pulumi, refresh=True)
         except Exception as e:
             raise ProvisioningError(f"stack.up failed: {e}") from e
 
