@@ -21,7 +21,8 @@ from minio import Minio
 from minio.error import S3Error
 
 from photoshare.bootstrap import bootstrap
-from platform_api import Credentials, PlatformClient
+from platform_api import Credentials
+from platform_client import Client
 
 log = logging.getLogger("photoshare.main")
 
@@ -42,7 +43,7 @@ def _ensure_bucket(client: Minio, bucket: str) -> None:
 
 
 def create_app(
-    platform: PlatformClient,
+    platform: Client,
     db: Credentials,
     store: Credentials | None,
 ) -> FastAPI:

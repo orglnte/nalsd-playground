@@ -1,3 +1,0 @@
-service_id = "photoshare"
-allowed_blocks = ["transactional-store", "object-store"]
-max_blocks = 4
