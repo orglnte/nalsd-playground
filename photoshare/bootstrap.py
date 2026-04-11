@@ -17,9 +17,9 @@ from pathlib import Path
 
 from platform_api import (
     BlockType,
-    CapabilityManifest,
     Credentials,
     PlatformClient,
+    ServiceScope,
     apply_manifesto,
 )
 
@@ -28,8 +28,8 @@ log = logging.getLogger("photoshare.bootstrap")
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
-def _build_manifest() -> CapabilityManifest:
-    return CapabilityManifest(
+def _build_scope() -> ServiceScope:
+    return ServiceScope(
         service_id="photoshare",
         allowed_blocks={
             BlockType.TRANSACTIONAL_STORE,
@@ -48,7 +48,7 @@ def bootstrap() -> tuple[PlatformClient, Credentials, Credentials | None]:
     """
     log.info("photoshare bootstrap: ACQUIRING phase begin")
     platform = PlatformClient(
-        service_id="photoshare", manifest=_build_manifest()
+        service_id="photoshare", scope=_build_scope()
     )
 
     db = platform.acquire(

@@ -12,9 +12,9 @@ from platform_api.manifesto import apply_manifesto
 from platform_api.types import (
     BlockSpec,
     BlockType,
-    CapabilityManifest,
     Credentials,
     PrivilegeState,
+    ServiceScope,
 )
 
 __all__ = [
@@ -29,7 +29,7 @@ __all__ = [
     "apply_manifesto",
     "BlockSpec",
     "BlockType",
-    "CapabilityManifest",
     "Credentials",
     "PrivilegeState",
+    "ServiceScope",
 ]

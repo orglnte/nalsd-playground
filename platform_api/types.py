@@ -49,7 +49,7 @@ class BlockSpec:
 
 
 @dataclass
-class CapabilityManifest:
+class ServiceScope:
     service_id: str
     allowed_blocks: set[BlockType]
     max_blocks: int = 16

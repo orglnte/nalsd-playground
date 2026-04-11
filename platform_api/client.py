@@ -7,9 +7,9 @@ from platform_api.errors import InvalidStateError, PrivilegeDroppedError
 from platform_api.types import (
     BlockSpec,
     BlockType,
-    CapabilityManifest,
     Credentials,
     PrivilegeState,
+    ServiceScope,
 )
 
 log = logging.getLogger("platform_api.client")
@@ -20,7 +20,7 @@ class PlatformClient:
     The service-facing surface of the Platform API.
 
     Lifecycle:
-        1. Construct with a service_id and a CapabilityManifest.
+        1. Construct with a service_id and a ServiceScope.
         2. Call acquire() one or more times during startup. Each call blocks
            until the building block is provisioned and ready, then returns
            Credentials.
@@ -36,16 +36,16 @@ class PlatformClient:
     def __init__(
         self,
         service_id: str,
-        manifest: CapabilityManifest,
+        scope: ServiceScope,
         *,
         engine: Any | None = None,
     ) -> None:
-        if manifest.service_id != service_id:
+        if scope.service_id != service_id:
             raise ValueError(
-                "manifest.service_id does not match PlatformClient service_id"
+                "scope.service_id does not match PlatformClient service_id"
             )
         self.service_id = service_id
-        self._manifest = manifest
+        self._scope = scope
         self._state = PrivilegeState.ACQUIRING
         self._leases: dict[str, BlockSpec] = {}
         self._credentials: dict[str, Credentials] = {}
@@ -75,7 +75,7 @@ class PlatformClient:
             )
 
         bt = BlockType(block_type) if isinstance(block_type, str) else block_type
-        self._manifest.check(bt, current_count=len(self._leases))
+        self._scope.check(bt, current_count=len(self._leases))
 
         if name in self._leases:
             existing = self._leases[name]

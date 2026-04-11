@@ -8,13 +8,13 @@ import pytest
 from platform_api import (
     BlockSpec,
     BlockType,
-    CapabilityManifest,
     Credentials,
     InvalidStateError,
     PlatformClient,
     PrivilegeDroppedError,
     PrivilegeState,
     QuotaExceededError,
+    ServiceScope,
     UnknownBlockError,
 )
 
@@ -48,7 +48,7 @@ class FakeEngine:
         self.destroyed = True
 
 
-def _manifest(**overrides: Any) -> CapabilityManifest:
+def _scope(**overrides: Any) -> ServiceScope:
     defaults: dict[str, Any] = {
         "service_id": "demo",
         "allowed_blocks": {
@@ -59,13 +59,13 @@ def _manifest(**overrides: Any) -> CapabilityManifest:
         "max_blocks": 4,
     }
     defaults.update(overrides)
-    return CapabilityManifest(**defaults)
+    return ServiceScope(**defaults)
 
 
 def _client(**engine_overrides: Any) -> tuple[PlatformClient, FakeEngine]:
     engine = FakeEngine(**engine_overrides)
     client = PlatformClient(
-        service_id="demo", manifest=_manifest(), engine=engine
+        service_id="demo", scope=_scope(), engine=engine
     )
     return client, engine
 
@@ -133,7 +133,7 @@ def test_acquire_failure_leaves_client_retryable():
 
     engine = FailingThenWorkingEngine()
     client = PlatformClient(
-        service_id="demo", manifest=_manifest(), engine=engine
+        service_id="demo", scope=_scope(), engine=engine
     )
     with pytest.raises(RuntimeError):
         client.acquire(BlockType.TRANSACTIONAL_STORE, name="photos")
@@ -190,15 +190,15 @@ def test_double_drop_is_idempotent():
     assert client.state is PrivilegeState.OPERATIONAL
 
 
-def test_capability_manifest_rejects_unauthorized_block():
+def test_scope_rejects_unauthorized_block():
     engine = FakeEngine()
-    restricted = CapabilityManifest(
+    restricted = ServiceScope(
         service_id="demo",
         allowed_blocks={BlockType.TRANSACTIONAL_STORE},
         max_blocks=4,
     )
     client = PlatformClient(
-        service_id="demo", manifest=restricted, engine=engine
+        service_id="demo", scope=restricted, engine=engine
     )
     with pytest.raises(UnknownBlockError):
         client.acquire(BlockType.OBJECT_STORE, name="images")
@@ -207,26 +207,26 @@ def test_capability_manifest_rejects_unauthorized_block():
 
 def test_quota_enforcement():
     engine = FakeEngine()
-    small = CapabilityManifest(
+    small = ServiceScope(
         service_id="demo",
         allowed_blocks={BlockType.TRANSACTIONAL_STORE},
         max_blocks=2,
     )
-    client = PlatformClient(service_id="demo", manifest=small, engine=engine)
+    client = PlatformClient(service_id="demo", scope=small, engine=engine)
     client.acquire(BlockType.TRANSACTIONAL_STORE, name="a", database="a")
     client.acquire(BlockType.TRANSACTIONAL_STORE, name="b", database="b")
     with pytest.raises(QuotaExceededError):
         client.acquire(BlockType.TRANSACTIONAL_STORE, name="c", database="c")
 
 
-def test_manifest_service_id_mismatch_rejected():
+def test_scope_service_id_mismatch_rejected():
     engine = FakeEngine()
-    wrong = CapabilityManifest(
+    wrong = ServiceScope(
         service_id="other",
         allowed_blocks={BlockType.TRANSACTIONAL_STORE},
     )
     with pytest.raises(ValueError, match="service_id"):
-        PlatformClient(service_id="demo", manifest=wrong, engine=engine)
+        PlatformClient(service_id="demo", scope=wrong, engine=engine)
 
 
 def test_shutdown_transitions_state():
