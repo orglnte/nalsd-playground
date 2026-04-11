@@ -26,7 +26,7 @@ def test_transactional_store_minimal_profile():
     assert "POSTGRES_PASSWORD" in config.env_vars
     assert "POSTGRES_DB" in config.env_vars
     assert "shared_buffers=16MB" in " ".join(config.command or [])
-    assert config.memory_mb <= 128
+    assert config.memory_mb == 96
     assert config.readiness.kind == "postgres"
     assert config.username is not None
     assert config.password is not None
@@ -41,7 +41,7 @@ def test_object_store_minimal_profile():
     assert "MINIO_ROOT_USER" in config.env_vars
     assert "MINIO_ROOT_PASSWORD" in config.env_vars
     assert config.command == ["server", "/data", "--quiet"]
-    assert config.memory_mb <= 256
+    assert config.memory_mb == 192
     assert config.readiness.kind == "minio"
     assert config.database is None
 
@@ -53,7 +53,7 @@ def test_ephemeral_kv_cache_minimal_profile():
     assert config.host_port == DEFAULT_HOST_PORTS[BlockType.EPHEMERAL_KV_CACHE]
     assert config.command is not None
     assert "--maxmemory" in config.command
-    assert config.memory_mb <= 64
+    assert config.memory_mb == 32
     assert config.readiness.kind == "redis"
 
 
@@ -82,12 +82,15 @@ def test_unsupported_profile_raises():
 def test_minimal_footprint_total_under_target():
     """
     Top-priority design goal: total memory limits for all three blocks at
-    minimal profile must stay under ~350 MB so the full system (demo app +
-    blocks) can fit in the ~200 MB RSS target with reasonable headroom.
+    minimal profile must stay tight enough that the full system (demo app +
+    blocks) fits under the ~200 MB RSS target. Current budget is 320 MB of
+    container limits (96+192+32) — measured v1.1 RSS was ~189 MB on macOS
+    arm64. The 330 bound here lets an individual block grow by up to ~10 MB
+    before this test fails; any larger drift is a design regression.
     """
     total = (
         backend_for(_spec(BlockType.TRANSACTIONAL_STORE)).memory_mb
         + backend_for(_spec(BlockType.OBJECT_STORE)).memory_mb
         + backend_for(_spec(BlockType.EPHEMERAL_KV_CACHE)).memory_mb
     )
-    assert total <= 350, f"minimal-profile memory budget blown: {total} MB"
+    assert total <= 330, f"minimal-profile memory budget blown: {total} MB"

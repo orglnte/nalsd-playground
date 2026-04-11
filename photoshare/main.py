@@ -142,13 +142,15 @@ def create_app(
             content_type = row[0]
             try:
                 obj = minio_client.get_object(bucket_name, photo_id)
-                data = obj.read()
-                obj.close()
-                obj.release_conn()
             except S3Error as e:
                 raise HTTPException(
                     status_code=500, detail=f"object-store error: {e.code}"
                 ) from e
+            try:
+                data = obj.read()
+            finally:
+                obj.close()
+                obj.release_conn()
             return Response(content=data, media_type=content_type)
 
     else:

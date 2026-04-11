@@ -94,8 +94,13 @@ class PulumiDockerEngine:
     def _run_stack_up(self, leases: dict[str, BlockSpec]) -> None:
         from pulumi import automation as auto
 
+        # Snapshot the lease set so the closure is immune to any later
+        # mutation of the caller's dict. The inline program may be invoked
+        # by Pulumi asynchronously relative to this call.
+        snapshot = dict(leases)
+
         def program() -> None:
-            self._render_program(leases)
+            self._render_program(snapshot)
 
         try:
             stack = auto.create_or_select_stack(
@@ -211,7 +216,10 @@ class PulumiDockerEngine:
             password=backend.password,
             socket_timeout=2,
         )
-        return bool(client.ping())
+        try:
+            return bool(client.ping())
+        finally:
+            client.close()
 
     def _check_minio(self, backend: BackendConfig) -> bool:
         if not self._tcp_open(backend.host_port):

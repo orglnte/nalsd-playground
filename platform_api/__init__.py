@@ -1,5 +1,6 @@
 from platform_api.client import PlatformClient
 from platform_api.errors import (
+    InvalidStateError,
     PlatformError,
     PrivilegeDroppedError,
     ProvisioningError,
@@ -19,6 +20,7 @@ from platform_api.types import (
 __all__ = [
     "PlatformClient",
     "PlatformError",
+    "InvalidStateError",
     "PrivilegeDroppedError",
     "ProvisioningError",
     "QuotaExceededError",

@@ -3,7 +3,13 @@ class PlatformError(Exception):
 
 
 class PrivilegeDroppedError(PlatformError):
-    """Raised when an operation requires a privilege that has been dropped."""
+    """Raised when acquire() is called after drop_to_scaling_only()."""
+
+
+class InvalidStateError(PlatformError):
+    """Raised when an operation is not permitted in the current state machine
+    state but no privilege has actually been dropped (e.g. scale_hint()
+    called before drop_to_scaling_only())."""
 
 
 class QuotaExceededError(PlatformError):

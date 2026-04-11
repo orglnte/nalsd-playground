@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from platform_api.errors import PrivilegeDroppedError
+from platform_api.errors import InvalidStateError, PrivilegeDroppedError
 from platform_api.types import (
     BlockSpec,
     BlockType,
@@ -95,8 +95,13 @@ class PlatformClient:
             name,
             profile,
         )
+        # Pass the prospective lease set (existing + this one) to the engine
+        # without mutating self._leases. Only on successful provision do we
+        # commit the lease and its credentials, so a failed acquire() leaves
+        # the client in a clean state that can be retried.
+        prospective = {**self._leases, name: spec}
+        credentials = self._engine.provision(spec, existing_leases=prospective)
         self._leases[name] = spec
-        credentials = self._engine.provision(spec, existing_leases=self._leases)
         self._credentials[name] = credentials
         return credentials
 
@@ -105,7 +110,7 @@ class PlatformClient:
             log.warning("drop_to_scaling_only called twice; ignoring")
             return
         if self._state is PrivilegeState.SHUTDOWN:
-            raise PrivilegeDroppedError(
+            raise InvalidStateError(
                 "cannot drop privileges after shutdown"
             )
         log.info(
@@ -116,9 +121,14 @@ class PlatformClient:
         self._state = PrivilegeState.OPERATIONAL
 
     def scale_hint(self, name: str, *, load_factor: float) -> None:
+        if self._state is PrivilegeState.SHUTDOWN:
+            raise InvalidStateError(
+                "scale_hint() not permitted after shutdown"
+            )
         if self._state is not PrivilegeState.OPERATIONAL:
-            raise PrivilegeDroppedError(
-                f"scale_hint() requires OPERATIONAL state, got {self._state.value}"
+            raise InvalidStateError(
+                f"scale_hint() requires OPERATIONAL state, got {self._state.value}; "
+                "call drop_to_scaling_only() first"
             )
         if name not in self._leases:
             raise ValueError(f"unknown lease '{name}'")

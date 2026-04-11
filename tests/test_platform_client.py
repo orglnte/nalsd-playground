@@ -10,6 +10,7 @@ from platform_api import (
     BlockType,
     CapabilityManifest,
     Credentials,
+    InvalidStateError,
     PlatformClient,
     PrivilegeDroppedError,
     PrivilegeState,
@@ -102,6 +103,46 @@ def test_acquire_idempotent_by_name():
     assert len(engine.provisioned) == 1
 
 
+def test_acquire_failure_leaves_client_retryable():
+    """If the engine raises during provision, no lease is recorded, so a
+    second attempt goes through the normal path (not the idempotent cache)."""
+
+    class FailingThenWorkingEngine:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.destroyed = False
+
+        def provision(
+            self, spec: BlockSpec, *, existing_leases: dict[str, BlockSpec]
+        ) -> Credentials:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("simulated provisioning failure")
+            return Credentials(
+                block_type=spec.block_type,
+                name=spec.name,
+                host="127.0.0.1",
+                port=12345,
+                username="u",
+                password="p",
+                database="d",
+            )
+
+        def destroy(self) -> None:
+            self.destroyed = True
+
+    engine = FailingThenWorkingEngine()
+    client = PlatformClient(
+        service_id="demo", manifest=_manifest(), engine=engine
+    )
+    with pytest.raises(RuntimeError):
+        client.acquire(BlockType.TRANSACTIONAL_STORE, name="photos")
+    # Lease was not committed — state is clean, retry works.
+    creds = client.acquire(BlockType.TRANSACTIONAL_STORE, name="photos")
+    assert creds.port == 12345
+    assert engine.calls == 2
+
+
 def test_acquire_type_conflict_on_same_name():
     client, _ = _client()
     client.acquire(BlockType.EPHEMERAL_KV_CACHE, name="oops")
@@ -119,9 +160,12 @@ def test_drop_blocks_subsequent_acquire():
 
 
 def test_scale_hint_rejected_before_drop():
+    """scale_hint requires OPERATIONAL. In ACQUIRING, privileges haven't been
+    dropped — they haven't been initialized yet — so this is an invalid-state
+    error, not a privilege-drop error."""
     client, _ = _client()
     client.acquire(BlockType.TRANSACTIONAL_STORE, name="photos")
-    with pytest.raises(PrivilegeDroppedError):
+    with pytest.raises(InvalidStateError):
         client.scale_hint("photos", load_factor=0.7)
 
 
