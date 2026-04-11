@@ -5,7 +5,7 @@ Each building block is an architectural capability (transactional-store,
 object-store, ephemeral-kv-cache) that maps to a concrete backend
 implementation via a minimal-footprint profile.
 
-The block definitions here are declarative. platform_api.engine is
+The block definitions here are declarative. platform_engine.engine is
 responsible for translating them into Pulumi Docker resources.
 """
 

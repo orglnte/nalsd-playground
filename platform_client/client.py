@@ -36,13 +36,14 @@ class Client:
     Service-side client for platformd.
 
     Construct, call connect(), then call acquire() / drop_to_scaling_only() /
-    scale_hint() just like the in-process PlatformClient. Errors from the
-    daemon are decoded into the existing PlatformError hierarchy, so
-    service code does not need to care that the engine is remote.
+    scale_hint(). Errors from the daemon are decoded into the existing
+    PlatformError hierarchy, so service code does not need to care that
+    the engine is remote.
 
-    The client-side state is advisory -- the daemon is the authority on
-    PrivilegeState starting from stage 7. For now it lets us raise
-    errors locally without a round-trip in the obvious wrong-state cases.
+    Client-side PrivilegeState is advisory — the daemon is the authority
+    and re-checks on every call. The pre-check here only exists to give
+    service code a local fast-fail without a round-trip in the obvious
+    wrong-state cases.
     """
 
     def __init__(
