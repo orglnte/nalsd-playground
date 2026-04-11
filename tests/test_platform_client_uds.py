@@ -118,6 +118,9 @@ def test_client_decodes_unknown_block_error(daemon) -> None:
 
 
 def test_client_drop_then_acquire_raises(daemon) -> None:
+    """The client's own advisory pre-check short-circuits on well-behaved
+    callers. See test_daemon_rejects_acquire_after_drop_of_tampered_client
+    for the proof that the daemon enforces this independently."""
     sock_path, _ = daemon
     with Client("demo", socket_path=sock_path) as client:
         client.acquire(BlockType.TRANSACTIONAL_STORE, name="db")
@@ -125,6 +128,31 @@ def test_client_drop_then_acquire_raises(daemon) -> None:
         assert client.state is PrivilegeState.OPERATIONAL
         with pytest.raises(PrivilegeDroppedError):
             client.acquire(BlockType.OBJECT_STORE, name="images")
+
+
+def test_daemon_rejects_acquire_after_drop_of_tampered_client(daemon) -> None:
+    """A malicious or buggy service that tampers with its own client state
+    after drop_to_scaling_only() must still be rejected by the daemon.
+
+    This is the Stage 7 proof: PrivilegeState enforcement lives in another
+    process, so resetting self._state in the client does not grant the
+    service the ability to acquire again. The daemon is the authority."""
+    sock_path, engines = daemon
+    with Client("demo", socket_path=sock_path) as client:
+        client.acquire(BlockType.TRANSACTIONAL_STORE, name="db")
+        client.drop_to_scaling_only()
+
+        # Simulate tampering: reset the client's view of its own state
+        # and try to acquire again. A well-behaved client would never do
+        # this; a compromised service absolutely would.
+        client._state = PrivilegeState.ACQUIRING
+
+        with pytest.raises(PrivilegeDroppedError):
+            client.acquire(BlockType.OBJECT_STORE, name="images")
+
+    # The daemon must not have provisioned the second block.
+    provisioned_names = [spec.name for spec in engines["demo"].provisioned]
+    assert provisioned_names == ["db"]
 
 
 def test_client_scale_hint_requires_drop(daemon) -> None:

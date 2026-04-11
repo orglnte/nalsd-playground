@@ -328,8 +328,10 @@ def test_server_rejects_unknown_block(running_server) -> None:
 
 def test_server_privilege_drop_is_per_connection(running_server) -> None:
     """Disconnect resets PrivilegeState — a new connection gets ACQUIRING
-    again. This is a deliberate prototype-stage decision; stage 7 will
-    move PrivilegeState to persist across reconnects at the daemon."""
+    again. This is deliberate: a service-process restart must re-enter
+    the ACQUIRING phase so the v1 → v1.1 infrastructure-change demo works.
+    Within a single connection, the daemon enforces the drop regardless
+    of whatever the client reports."""
     sock_path, _ = running_server
     conn = _ClientConn(sock_path)
     try:
