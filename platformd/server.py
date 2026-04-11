@@ -9,11 +9,15 @@ from typing import Any, Callable
 
 from platform_engine.engine_protocol import Engine
 from platform_api.errors import PlatformError
+from platform_api.protocol import (
+    encode_credentials,
+    error_response,
+    result_response,
+)
 from platform_api.types import BlockType
 from platformd.auth import peer_uid
 from platformd.config import DaemonConfig
 from platformd.identities import Identities, UnknownPeerError
-from platformd.protocol import encode_credentials, error_response, result_response
 from platformd.scope_store import ScopeNotFoundError, ScopeStore
 from platformd.session import Session
 

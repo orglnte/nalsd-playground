@@ -1,3 +1,22 @@
+"""
+platform_client — UDS client for platformd.
+
+This is a thin transport-and-codec layer. It owns a socket, serialises
+JSON-RPC calls onto it, and decodes error responses back into the
+PlatformError hierarchy via the shared platform_api.protocol table.
+
+Crucially, the client does NOT track PrivilegeState or any other piece
+of session state. The daemon is the sole authority on what calls are
+legal at any given moment; every method round-trips, and the daemon's
+answer is the answer. An earlier version of this class mirrored the
+state machine locally as a round-trip optimization; the duplication
+grew a second copy of the transition logic, a second error-code table,
+and a test (`test_daemon_rejects_acquire_after_drop_of_tampered_client`)
+whose whole purpose was to prove the local copy was not load-bearing.
+Deleting the local copy is simpler, and the trust-boundary semantics
+are unchanged.
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,46 +25,15 @@ import socket
 from pathlib import Path
 from typing import Any
 
-from platform_api.errors import (
-    InvalidStateError,
-    PlatformError,
-    PrivilegeDroppedError,
-    ProvisioningError,
-    QuotaExceededError,
-    ReadinessTimeoutError,
-    UnknownBlockError,
-)
-from platform_api.types import BlockType, Credentials, PrivilegeState
+from platform_api.protocol import decode_credentials, exception_for
+from platform_api.types import BlockType, Credentials
 
 log = logging.getLogger("platform_client")
 
 DEFAULT_SOCKET_PATH = Path("dev-config/run/platformd.sock")
 
-_ERROR_BY_CODE: dict[str, type[PlatformError]] = {
-    "privilege_dropped": PrivilegeDroppedError,
-    "invalid_state": InvalidStateError,
-    "quota_exceeded": QuotaExceededError,
-    "unknown_block": UnknownBlockError,
-    "provisioning": ProvisioningError,
-    "readiness_timeout": ReadinessTimeoutError,
-}
-
 
 class Client:
-    """
-    Service-side client for platformd.
-
-    Construct, call connect(), then call acquire() / drop_to_scaling_only() /
-    scale_hint(). Errors from the daemon are decoded into the existing
-    PlatformError hierarchy, so service code does not need to care that
-    the engine is remote.
-
-    Client-side PrivilegeState is advisory — the daemon is the authority
-    and re-checks on every call. The pre-check here only exists to give
-    service code a local fast-fail without a round-trip in the obvious
-    wrong-state cases.
-    """
-
     def __init__(
         self,
         service_id: str,
@@ -55,13 +43,8 @@ class Client:
         self.service_id = service_id
         self._socket_path = Path(socket_path)
         self._sock: socket.socket | None = None
-        self._reader: Any = None  # binary file object
+        self._reader: Any = None
         self._next_id = 0
-        self._state = PrivilegeState.ACQUIRING
-
-    @property
-    def state(self) -> PrivilegeState:
-        return self._state
 
     def connect(self) -> None:
         if self._sock is not None:
@@ -103,11 +86,6 @@ class Client:
         profile: str = "minimal",
         **params: Any,
     ) -> Credentials:
-        if self._state is not PrivilegeState.ACQUIRING:
-            raise PrivilegeDroppedError(
-                f"acquire() not permitted in state {self._state.value}; "
-                "privileges have already been dropped for this client"
-            )
         bt_value = (
             block_type.value if isinstance(block_type, BlockType) else block_type
         )
@@ -120,37 +98,22 @@ class Client:
                 "params": params,
             },
         )
-        return _decode_credentials(result)
+        return decode_credentials(result)
 
     def drop_to_scaling_only(self) -> None:
-        if self._state is PrivilegeState.OPERATIONAL:
-            log.warning("drop_to_scaling_only called twice; ignoring")
-            return
-        if self._state is PrivilegeState.SHUTDOWN:
-            raise InvalidStateError("cannot drop privileges after shutdown")
         self._call("DropToScalingOnly", {})
-        self._state = PrivilegeState.OPERATIONAL
 
     def scale_hint(self, name: str, *, load_factor: float) -> None:
-        if self._state is PrivilegeState.SHUTDOWN:
-            raise InvalidStateError("scale_hint() not permitted after shutdown")
-        if self._state is not PrivilegeState.OPERATIONAL:
-            raise InvalidStateError(
-                f"scale_hint() requires OPERATIONAL, got {self._state.value}; "
-                "call drop_to_scaling_only() first"
-            )
-        self._call(
-            "ScaleHint", {"name": name, "load_factor": load_factor}
-        )
+        self._call("ScaleHint", {"name": name, "load_factor": load_factor})
 
     def shutdown(self) -> None:
-        if self._state is PrivilegeState.SHUTDOWN:
+        if self._sock is None:
             return
         try:
-            if self._sock is not None:
-                self._call("Shutdown", {})
+            self._call("Shutdown", {})
+        except Exception:  # noqa: BLE001
+            pass
         finally:
-            self._state = PrivilegeState.SHUTDOWN
             self.close()
 
     def _call(self, method: str, params: dict[str, Any]) -> Any:
@@ -163,33 +126,22 @@ class Client:
 
         line = self._reader.readline()
         if not line:
+            from platform_api.errors import ProvisioningError
             raise ProvisioningError(
                 f"platformd closed the connection during {method}"
             )
         try:
             response = json.loads(line.decode("utf-8"))
         except json.JSONDecodeError as e:
+            from platform_api.errors import ProvisioningError
             raise ProvisioningError(
                 f"malformed response from platformd: {e}"
             ) from e
 
         if "error" in response:
             err = response["error"]
-            code = err.get("code", "internal_error")
-            message = err.get("message", "unknown error")
-            exc_type = _ERROR_BY_CODE.get(code, PlatformError)
-            raise exc_type(message)
+            raise exception_for(
+                err.get("code", "internal_error"),
+                err.get("message", "unknown error"),
+            )
         return response.get("result")
-
-
-def _decode_credentials(d: dict[str, Any]) -> Credentials:
-    return Credentials(
-        block_type=BlockType(d["block_type"]),
-        name=d["name"],
-        host=d["host"],
-        port=d["port"],
-        username=d.get("username"),
-        password=d.get("password"),
-        database=d.get("database"),
-        extras=d.get("extras") or {},
-    )
