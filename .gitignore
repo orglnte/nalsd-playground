@@ -12,3 +12,4 @@ build/
 state/
 .DS_Store
 tmp/
+COMMIT_MSG
