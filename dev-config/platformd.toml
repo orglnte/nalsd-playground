@@ -1,0 +1,6 @@
+socket_path = "run/platformd.sock"
+scope_dir = "scopes"
+identities_path = "identities.toml"
+
+[service.photoshare]
+mode = "enforce"
