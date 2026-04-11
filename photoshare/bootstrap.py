@@ -62,11 +62,18 @@ def bootstrap() -> tuple[PlatformClient, Credentials, Credentials | None]:
     log.info("bootstrap: manifesto applied=%s", applied)
 
     # --- v1.1 insertion point ---
-    # Uncomment the next block to add object-store. That single edit is the
-    # entire infrastructure change — no YAML, no Terraform, no deploy pipe.
-    store: Credentials | None = None
-    # store = platform.acquire(BlockType.OBJECT_STORE, name="images")
-    # log.info("bootstrap: object-store 'images' acquired at %s:%d", store.host, store.port)
+    # This acquire() call *is* the infrastructure change. No YAML, no
+    # Terraform, no deploy pipe. Restart the service and Pulumi provisions
+    # a new MinIO container mid-lifecycle; main.py then sees `store is not
+    # None` and registers the upload endpoints that were absent in v1.
+    store: Credentials | None = platform.acquire(
+        BlockType.OBJECT_STORE, name="images"
+    )
+    log.info(
+        "bootstrap: object-store 'images' acquired at %s:%d",
+        store.host,
+        store.port,
+    )
     # --- end v1.1 insertion point ---
 
     platform.drop_to_scaling_only()
