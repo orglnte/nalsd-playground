@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from platform_api.engine_protocol import Engine
 from platform_api.errors import InvalidStateError, PrivilegeDroppedError
 from platform_api.types import (
     BlockSpec,
@@ -38,7 +39,7 @@ class PlatformClient:
         service_id: str,
         scope: ServiceScope,
         *,
-        engine: Any | None = None,
+        engine: Engine | None = None,
     ) -> None:
         if scope.service_id != service_id:
             raise ValueError(
