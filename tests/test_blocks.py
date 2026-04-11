@@ -41,7 +41,7 @@ def test_object_store_minimal_profile():
     assert "MINIO_ROOT_USER" in config.env_vars
     assert "MINIO_ROOT_PASSWORD" in config.env_vars
     assert config.command == ["server", "/data", "--quiet"]
-    assert config.memory_mb == 192
+    assert config.memory_mb == 96
     assert config.readiness.kind == "minio"
     assert config.database is None
 
@@ -79,18 +79,22 @@ def test_unsupported_profile_raises():
         )
 
 
-def test_minimal_footprint_total_under_target():
+PER_BLOCK_MINIMAL_CEILING_MB = 100
+
+
+def test_each_block_minimal_profile_under_per_block_ceiling():
     """
-    Top-priority design goal: total memory limits for all three blocks at
-    minimal profile must stay tight enough that the full system (demo app +
-    blocks) fits under the ~200 MB RSS target. Current budget is 320 MB of
-    container limits (96+192+32) — measured v1.1 RSS was ~189 MB on macOS
-    arm64. The 330 bound here lets an individual block grow by up to ~10 MB
-    before this test fails; any larger drift is a design regression.
+    Top-priority design goal: every block on its `minimal` profile must
+    sustain ~100 rps/qps on the least memory and CPU that can achieve
+    that. The concrete guardrail is that NO minimal block may declare a
+    `memory_mb` above PER_BLOCK_MINIMAL_CEILING_MB. Going higher is
+    reserved for explicit profile=... at acquire time or scale_hint()
+    post-drop; anything that lifts a block's minimal limit above 100 MB
+    is a design regression, not a tuning choice.
     """
-    total = (
-        backend_for(_spec(BlockType.TRANSACTIONAL_STORE)).memory_mb
-        + backend_for(_spec(BlockType.OBJECT_STORE)).memory_mb
-        + backend_for(_spec(BlockType.EPHEMERAL_KV_CACHE)).memory_mb
-    )
-    assert total <= 330, f"minimal-profile memory budget blown: {total} MB"
+    for block_type in BlockType:
+        config = backend_for(_spec(block_type))
+        assert config.memory_mb <= PER_BLOCK_MINIMAL_CEILING_MB, (
+            f"{block_type.value} minimal profile exceeds per-block ceiling: "
+            f"{config.memory_mb} MB > {PER_BLOCK_MINIMAL_CEILING_MB} MB"
+        )
