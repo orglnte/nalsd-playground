@@ -24,7 +24,7 @@ log = logging.getLogger("platformd.engine")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PULUMI_BIN = REPO_ROOT / ".pulumi" / "bin"
-STATE_DIR = REPO_ROOT / "state"
+STATE_DIR = REPO_ROOT / ".pulumi_state"
 
 
 def _setup_pulumi_env() -> None:
