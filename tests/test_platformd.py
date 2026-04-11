@@ -119,6 +119,32 @@ def test_identities_rejects_empty(tmp_path: Path) -> None:
         load_identities(p)
 
 
+@pytest.mark.parametrize(
+    "bad_service_id",
+    [
+        "../admin",
+        "photoshare/../admin",
+        "/etc/passwd",
+        "",
+        ".hidden",
+        "photoshare.recorded",  # collision with the record-mode suffix
+    ],
+)
+def test_identities_rejects_unsafe_service_id(
+    tmp_path: Path, bad_service_id: str
+) -> None:
+    """service_id is composed into filesystem paths by ScopeStore and the
+    recording-output path. Unsafe values must be rejected at load time
+    so no downstream code has to re-validate."""
+    p = _write(
+        tmp_path,
+        "identities.toml",
+        f'[[identities]]\nuid = 501\nservice_id = "{bad_service_id}"\n',
+    )
+    with pytest.raises(ValueError, match="not a safe identifier"):
+        load_identities(p)
+
+
 # --- scope store ---
 
 def test_scope_store_loads_by_service_id(tmp_path: Path) -> None:
@@ -297,6 +323,25 @@ def test_session_record_mode_writes_on_shutdown_without_drop(tmp_path: Path) -> 
     assert out.is_file()
     parsed = tomllib.loads(out.read_text())
     assert parsed["allowed_blocks"] == ["transactional-store"]
+
+
+def test_session_record_mode_drop_then_shutdown_writes_once(tmp_path: Path) -> None:
+    """drop_to_scaling_only() writes the recording; a subsequent shutdown()
+    must not write again (the _recording_written guard), so the operator
+    sees exactly one authoritative draft per recording run."""
+    out = tmp_path / "demo.recorded.toml"
+    session = Session(
+        service_id="demo",
+        engine=FakeEngine(),
+        mode="record",
+        recording_output=out,
+    )
+    session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
+    session.drop_to_scaling_only()
+    first = out.read_text()
+    session.shutdown()
+    second = out.read_text()
+    assert first == second, "shutdown must not rewrite the recording after drop"
 
 
 def test_session_record_mode_no_acquires_skips_write(tmp_path: Path) -> None:
@@ -565,19 +610,125 @@ def test_server_record_mode_end_to_end(recording_server) -> None:
     assert BlockType.EPHEMERAL_KV_CACHE in scope.allowed_blocks
 
 
-def test_server_record_mode_then_promote_flow(recording_server) -> None:
-    """After a recording run, the daemon session ends. Renaming the
-    .recorded file to .toml and reconnecting should work — except this
-    server is still configured with mode=record so it would still record.
-    This test captures the scope-load step only."""
-    sock_path, scope_dir, _ = recording_server
-    conn = _ClientConn(sock_path)
-    try:
-        conn.call("Acquire", {"block_type": "object-store", "name": "images"})
-        conn.call("DropToScalingOnly")
-    finally:
-        conn.close()
+def _run_server(
+    tmp_path: Path, *, record_for: set[str], scope_files: dict[str, str]
+) -> tuple[Server, Path, Path, dict[str, FakeEngine], threading.Thread]:
+    """Spin up a Server wired to tmp_path with the given mode configuration.
 
-    recorded = scope_dir / "demo.recorded.toml"
-    parsed = tomllib.loads(recorded.read_text())
-    assert parsed["allowed_blocks"] == ["object-store"]
+    record_for    — set of service_ids to run in record mode.
+    scope_files   — service_id → TOML contents for scope files to place
+                    on disk before the server starts.
+
+    Returns the running server, the socket path, the scope dir, the
+    engine registry, and the serving thread so the caller can stop()
+    cleanly.
+    """
+    short_sock = Path(f"/tmp/nalsd-ptd-s9-{uuid.uuid4().hex[:8]}.sock")
+    scope_dir = tmp_path / "scopes"
+    scope_dir.mkdir(exist_ok=True)
+    for svc, body in scope_files.items():
+        (scope_dir / f"{svc}.toml").write_text(body)
+
+    cfg_lines = [
+        f'socket_path = "{short_sock}"',
+        'scope_dir = "scopes"',
+        'identities_path = "identities.toml"',
+    ]
+    for svc in record_for:
+        cfg_lines.append("")
+        cfg_lines.append(f"[service.{svc}]")
+        cfg_lines.append('mode = "record"')
+    cfg_path = tmp_path / "platformd.toml"
+    cfg_path.write_text("\n".join(cfg_lines) + "\n")
+    (tmp_path / "identities.toml").write_text(
+        f'[[identities]]\nuid = {os.getuid()}\nservice_id = "photoshare"\n'
+    )
+
+    config = load_daemon_config(cfg_path)
+    identities = Identities(by_uid={os.getuid(): "photoshare"})
+    store = ScopeStore(scope_dir=config.scope_dir)
+    engines: dict[str, FakeEngine] = {}
+
+    def factory(service_id: str) -> FakeEngine:
+        engines.setdefault(service_id, FakeEngine())
+        return engines[service_id]
+
+    server = Server(
+        config=config,
+        identities=identities,
+        scope_store=store,
+        engine_factory=factory,
+    )
+    server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, config.socket_path, scope_dir, engines, thread
+
+
+def test_full_record_then_enforce_flow(tmp_path: Path) -> None:
+    """The Stage 9 bootstrap story: a new service comes up under a
+    recording daemon, acquires whatever it needs, drops; the operator
+    reviews the recorded scope, renames it to promote, flips the daemon
+    to enforce; the service reconnects and the daemon now honours the
+    scope as a hard authorization boundary — the same acquires succeed,
+    a NEW acquire outside the recorded scope is rejected.
+
+    This exercises every Stage 8 seam end-to-end against a real UDS
+    with a FakeEngine. The Docker E2E in test_e2e_privilege_drop.py
+    covers the in-process path; this is the split-topology equivalent
+    for the record→promote→enforce lifecycle."""
+
+    # --- Phase 1: record ---
+    server, sock_path, scope_dir, _, thread = _run_server(
+        tmp_path, record_for={"photoshare"}, scope_files={}
+    )
+    try:
+        conn = _ClientConn(sock_path)
+        try:
+            r1 = conn.call(
+                "Acquire",
+                {"block_type": "transactional-store", "name": "photos"},
+            )
+            assert "error" not in r1, r1
+            r2 = conn.call("DropToScalingOnly")
+            assert "error" not in r2, r2
+        finally:
+            conn.close()
+    finally:
+        server.stop()
+        thread.join(timeout=2)
+
+    recorded = scope_dir / "photoshare.recorded.toml"
+    assert recorded.is_file()
+    # Operator reviews, then promotes by renaming.
+    promoted = scope_dir / "photoshare.toml"
+    recorded.rename(promoted)
+    assert not recorded.exists()
+    assert promoted.is_file()
+
+    # --- Phase 2: enforce (new daemon, same scope dir) ---
+    server2, sock_path2, _, _, thread2 = _run_server(
+        tmp_path, record_for=set(), scope_files={}
+    )
+    try:
+        conn = _ClientConn(sock_path2)
+        try:
+            # Within recorded scope — allowed.
+            ok = conn.call(
+                "Acquire",
+                {"block_type": "transactional-store", "name": "photos"},
+            )
+            assert "error" not in ok, ok
+
+            # Outside recorded scope — must be rejected. object-store
+            # was never seen during recording, so enforce must refuse.
+            rejected = conn.call(
+                "Acquire",
+                {"block_type": "object-store", "name": "images"},
+            )
+            assert rejected["error"]["code"] == "unknown_block", rejected
+        finally:
+            conn.close()
+    finally:
+        server2.stop()
+        thread2.join(timeout=2)

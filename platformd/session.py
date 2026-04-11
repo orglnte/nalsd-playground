@@ -227,7 +227,7 @@ class Session:
             f"max_blocks = {len(self._recorded_order)}\n"
         )
         self._recording_output.parent.mkdir(parents=True, exist_ok=True)
-        self._recording_output.write_text(body)
+        self._recording_output.write_text(body, encoding="utf-8")
         self._recording_written = True
         log.warning(
             "RECORD: service=%s wrote %s (%d acquires captured)",
