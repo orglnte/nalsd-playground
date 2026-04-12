@@ -19,12 +19,18 @@ struct Args {
     bucket: String,
     #[arg(long, default_value = "us-east-1")]
     region: String,
-    /// Target writes per second (total across all workers)
+    /// Target writes per second (total across all workers, ignored if --count is set)
     #[arg(long, default_value = "500")]
     wps: u64,
-    /// Duration in seconds
+    /// Duration in seconds (ignored if --count is set)
     #[arg(long, default_value = "180")]
     duration: u64,
+    /// Fixed number of objects to write (max rate, no ticker). Overrides --wps/--duration.
+    #[arg(long)]
+    count: Option<u64>,
+    /// Number of parallel workers (only used with --count)
+    #[arg(long, default_value = "8")]
+    workers: u64,
 }
 
 fn now_ms() -> u64 {
@@ -63,6 +69,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         s3::BucketConfiguration::default(),
     )
     .await;
+
+    // Fixed-count mode: N objects, max rate, no ticker
+    if let Some(count) = args.count {
+        let workers = args.workers.max(1);
+        let per_worker = count / workers;
+        let total_writes = Arc::new(AtomicU64::new(0));
+        let total_errors = Arc::new(AtomicU64::new(0));
+
+        println!("FIXED COUNT: {} objects, {} workers, max rate", count, workers);
+
+        let t0 = Instant::now();
+        let mut handles = Vec::new();
+        for w in 0..workers {
+            let writes = total_writes.clone();
+            let errors = total_errors.clone();
+            let payload = payload.clone();
+            let bucket = s3::Bucket::new(&args.bucket, region.clone(), creds.clone())?
+                .with_path_style();
+            handles.push(tokio::spawn(async move {
+                for i in 0..per_worker {
+                    let key = format!("w{}-{}", w, i);
+                    match bucket.put_object(&key, &payload).await {
+                        Ok(resp) if resp.status_code() < 400 => {
+                            writes.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(_) | Err(_) => {
+                            errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }));
+        }
+        for h in handles {
+            h.await?;
+        }
+        let elapsed = t0.elapsed().as_secs_f64();
+        let w = total_writes.load(Ordering::Relaxed);
+        let e = total_errors.load(Ordering::Relaxed);
+        let rate = w as f64 / elapsed;
+
+        println!("\n========== RESULTS ==========");
+        println!("target count:     {}", per_worker * workers);
+        println!("counted writes:   {}", w);
+        println!("counted errors:   {}", e);
+        println!("elapsed:          {:.2} s", elapsed);
+        println!("rate:             {:.1} obj/s", rate);
+        println!("=============================");
+        return Ok(());
+    }
 
     let total_writes = Arc::new(AtomicU64::new(0));
     let total_errors = Arc::new(AtomicU64::new(0));
