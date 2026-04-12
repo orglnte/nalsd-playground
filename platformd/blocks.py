@@ -116,6 +116,11 @@ def _object_store(spec: BlockSpec) -> BackendConfig:
         env_vars={
             "RUSTFS_ROOT_USER": username,
             "RUSTFS_ROOT_PASSWORD": password,
+            # Single-node dev: scanner walks all objects every 60s
+            # and healer does Reed-Solomon reconstruction — both are
+            # meaningless without erasure-coded redundancy.
+            "RUSTFS_SCANNER_ENABLED": "false",
+            "RUSTFS_HEAL_ENABLED": "false",
         },
         command=["server", "/data"],
         memory_mb=256,
