@@ -32,6 +32,7 @@ class BackendConfig:
     password: str | None
     database: str | None
     readiness: "ReadinessCheck"
+    tmpfs: dict[str, str] = field(default_factory=dict)
     extras: dict[str, str] = field(default_factory=dict)
 
 
@@ -102,27 +103,27 @@ def _object_store(spec: BlockSpec) -> BackendConfig:
             f"unsupported profile '{spec.profile}' for object-store "
             "(prototype supports 'minimal' only)"
         )
-    username = spec.params.get("username", "platform")
-    password = spec.params.get("password", "platform-local-password")
     host_port = spec.params.get(
         "host_port", DEFAULT_HOST_PORTS[BlockType.OBJECT_STORE]
     )
     bucket = spec.params.get("bucket", spec.name)
+    username = spec.params.get("username", "platform")
+    password = spec.params.get("password", "platform-local-password")
     return BackendConfig(
-        image="minio/minio:latest",
+        image="rustfs/rustfs:latest",
         container_port=9000,
         host_port=host_port,
         env_vars={
-            "MINIO_ROOT_USER": username,
-            "MINIO_ROOT_PASSWORD": password,
+            "RUSTFS_ROOT_USER": username,
+            "RUSTFS_ROOT_PASSWORD": password,
         },
-        command=["server", "/data", "--quiet"],
-        memory_mb=96,
-        memory_swap_mb=96,
+        command=["server", "/data"],
+        memory_mb=256,
+        memory_swap_mb=256,
         username=username,
         password=password,
         database=None,
-        readiness=ReadinessCheck(kind="minio", timeout_s=60.0),
+        readiness=ReadinessCheck(kind="rustfs", timeout_s=60.0),
         extras={"bucket": bucket},
     )
 

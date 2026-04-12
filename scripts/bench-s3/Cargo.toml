@@ -1,0 +1,12 @@
+[package]
+name = "bench-s3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+rust-s3 = { version = "0.35", default-features = false, features = ["tokio-rustls-tls"] }
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = 2

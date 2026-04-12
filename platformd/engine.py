@@ -135,20 +135,23 @@ class PulumiDockerEngine:
                 name=backend.image,
                 keep_locally=True,
             )
+            ports = [
+                docker.ContainerPortArgs(
+                    internal=backend.container_port,
+                    external=backend.host_port,
+                    ip=self._host,
+                    protocol="tcp",
+                )
+            ]
+
             docker.Container(
                 f"ctr-{lease_name}",
                 image=image.image_id,
                 name=f"nalsd-{self.service_id}-{lease_name}",
                 envs=envs,
                 command=backend.command,
-                ports=[
-                    docker.ContainerPortArgs(
-                        internal=backend.container_port,
-                        external=backend.host_port,
-                        ip=self._host,
-                        protocol="tcp",
-                    )
-                ],
+                ports=ports,
+                tmpfs=backend.tmpfs or None,
                 memory=backend.memory_mb,
                 memory_swap=backend.memory_swap_mb,
                 restart="unless-stopped",
@@ -184,8 +187,8 @@ class PulumiDockerEngine:
             return self._check_postgres(backend)
         if kind == "redis":
             return self._check_redis(backend)
-        if kind == "minio":
-            return self._check_minio(backend)
+        if kind == "rustfs":
+            return self._check_rustfs(backend)
         raise ValueError(f"unknown readiness kind {kind}")
 
     def _tcp_open(self, port: int) -> bool:
@@ -228,7 +231,7 @@ class PulumiDockerEngine:
         finally:
             client.close()
 
-    def _check_minio(self, backend: BackendConfig) -> bool:
+    def _check_rustfs(self, backend: BackendConfig) -> bool:
         if not self._tcp_open(backend.host_port):
             return False
         import urllib.request

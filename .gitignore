@@ -13,3 +13,5 @@ build/
 .DS_Store
 tmp/
 COMMIT_MSG
+scripts/*/target/
+scripts/__pycache__/

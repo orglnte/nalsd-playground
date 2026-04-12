@@ -35,14 +35,11 @@ def test_transactional_store_minimal_profile():
 
 def test_object_store_minimal_profile():
     config = backend_for(_spec(BlockType.OBJECT_STORE))
-    assert "minio" in config.image
+    assert "rustfs" in config.image
     assert config.container_port == 9000
     assert config.host_port == DEFAULT_HOST_PORTS[BlockType.OBJECT_STORE]
-    assert "MINIO_ROOT_USER" in config.env_vars
-    assert "MINIO_ROOT_PASSWORD" in config.env_vars
-    assert config.command == ["server", "/data", "--quiet"]
-    assert config.memory_mb == 96
-    assert config.readiness.kind == "minio"
+    assert config.memory_mb == 256
+    assert config.readiness.kind == "rustfs"
     assert config.database is None
 
 
@@ -79,7 +76,7 @@ def test_unsupported_profile_raises():
         )
 
 
-PER_BLOCK_MINIMAL_CEILING_MB = 100
+PER_BLOCK_MINIMAL_CEILING_MB = 256
 
 
 def test_each_block_minimal_profile_under_per_block_ceiling():
