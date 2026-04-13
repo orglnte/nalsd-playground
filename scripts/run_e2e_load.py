@@ -11,8 +11,12 @@ import importlib.util
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+# Unbuffered stdout so live progress shows up when piped
+sys.stdout.reconfigure(line_buffering=True)
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -28,7 +32,7 @@ VENV_PYTHON = str(REPO / ".venv/bin/python")
 
 
 class NalsdLoadTest(lib.LoadTestOrchestrator):
-    containers = ["nalsd-photoshare-images", "nalsd-photoshare-photos"]
+    containers = ["nalsd-photoshare-metadata", "nalsd-photoshare-photos"]
     k6_script = "scripts/k6/photo-app.ts"
     repo = REPO
     results_base = Path("tmp/load_test_results")
@@ -85,7 +89,8 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
 
         # Raise RustFS memory
         mem = self.args.rustfs_mem
-        lib.shell(f"docker update --memory {mem} --memory-swap {mem} nalsd-photoshare-images")
+        rustfs = "nalsd-photoshare-photos"
+        lib.shell(f"docker update --memory {mem} --memory-swap {mem} {rustfs}")
         print(f"  RustFS memory set to {mem}")
 
         return self._app.pid
@@ -107,9 +112,21 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
         self._platformd_log.close()
 
         # Collect RustFS internal log
-        r = lib.shell("docker exec nalsd-photoshare-images cat /logs/rustfs.log", check=False, timeout=10)
+        rustfs = "nalsd-photoshare-photos"
+        r = lib.shell(f"docker exec {rustfs} cat /logs/rustfs.log", check=False, timeout=10)
         (self.results_dir / "rustfs_internal.log").write_text(r.stdout)
 
 
 if __name__ == "__main__":
-    NalsdLoadTest().run()
+    test = NalsdLoadTest()
+
+    # Graceful shutdown on SIGTERM/SIGINT
+    def _handle_signal(sig, frame):
+        print(f"\n  Received signal {sig}, tearing down...")
+        test.teardown()
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    test.run()
