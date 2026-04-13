@@ -60,13 +60,13 @@ def test_transactional_store_custom_credentials():
             BlockType.TRANSACTIONAL_STORE,
             username="alice",
             password="secret",
-            database="photos",
+            database="metadata",
         )
     )
     assert config.env_vars["POSTGRES_USER"] == "alice"
     assert config.env_vars["POSTGRES_PASSWORD"] == "secret"
-    assert config.env_vars["POSTGRES_DB"] == "photos"
-    assert config.database == "photos"
+    assert config.env_vars["POSTGRES_DB"] == "metadata"
+    assert config.database == "metadata"
 
 
 def test_unsupported_profile_raises():

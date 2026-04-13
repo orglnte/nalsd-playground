@@ -48,11 +48,11 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
 
     db = platform.acquire(
         BlockType.TRANSACTIONAL_STORE,
-        name="photos",
-        database="photos",
+        name="metadata",
+        database="metadata",
     )
     log.info(
-        "bootstrap: transactional-store 'photos' acquired at %s:%d",
+        "bootstrap: transactional-store 'metadata' acquired at %s:%d",
         db.host,
         db.port,
     )
@@ -68,10 +68,10 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     # main.py then sees `store is not None` and registers the upload
     # endpoints that were absent in v1.
     store: Credentials | None = platform.acquire(
-        BlockType.OBJECT_STORE, name="images"
+        BlockType.OBJECT_STORE, name="photos"
     )
     log.info(
-        "bootstrap: object-store 'images' acquired at %s:%d",
+        "bootstrap: object-store 'photos' acquired at %s:%d",
         store.host,
         store.port,
     )
