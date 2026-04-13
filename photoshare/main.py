@@ -13,10 +13,9 @@ import io
 import logging
 import random
 import uuid
-from contextlib import contextmanager
-from typing import Iterator
 
 import psycopg
+from psycopg_pool import ConnectionPool
 from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from minio import Minio
 from minio.error import S3Error
@@ -28,13 +27,13 @@ from platform_api import Client
 log = logging.getLogger("photoshare.main")
 
 
-@contextmanager
-def _pg(creds: Credentials) -> Iterator[psycopg.Connection]:
-    conn = psycopg.connect(creds.as_dsn(), connect_timeout=5)
-    try:
-        yield conn
-    finally:
-        conn.close()
+def _make_pool(creds: Credentials) -> ConnectionPool:
+    return ConnectionPool(
+        creds.as_dsn(),
+        min_size=2,
+        max_size=10,
+        kwargs={"connect_timeout": 5},
+    )
 
 
 def _ensure_bucket(client: Minio, bucket: str) -> None:
@@ -52,6 +51,8 @@ def create_app(
     app.state.platform = platform
     app.state.db = db
     app.state.store = store
+
+    pool = _make_pool(db)
 
     minio_client: Minio | None = None
     bucket_name: str | None = None
@@ -83,7 +84,7 @@ def create_app(
     def search_photos(q: str = Query(default="")) -> dict:
         if not q:
             q = random.choice(["sunset", "beach", "mountain", "city", "forest"])
-        with _pg(db) as conn:
+        with pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id, title, filename, uploaded_at FROM photos "
@@ -102,7 +103,7 @@ def create_app(
     def list_photos(page: int = Query(default=0, ge=0)) -> dict:
         limit = 20
         offset = page * limit
-        with _pg(db) as conn:
+        with pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id, title, filename, size_bytes, uploaded_at "
@@ -159,7 +160,7 @@ def create_app(
                 length=size,
                 content_type=content_type,
             )
-            with _pg(db) as conn:
+            with pool.connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO photos (id, filename, content_type, "
@@ -176,7 +177,7 @@ def create_app(
 
         @app.get("/photos/{photo_id}")
         def fetch_photo(photo_id: str) -> Response:
-            with _pg(db) as conn:
+            with pool.connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         "SELECT content_type FROM photos WHERE id = %s",
