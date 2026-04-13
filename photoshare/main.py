@@ -76,7 +76,6 @@ def create_app(
             blocks["object-store"] = store.name
         return {
             "service": "photoshare",
-            "privilege_state": platform.state.value,
             "acquired_blocks": blocks,
         }
 

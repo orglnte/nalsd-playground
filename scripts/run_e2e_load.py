@@ -91,6 +91,7 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
         # Raise RustFS memory
         mem = self.args.rustfs_mem
         rustfs = "nalsd-photoshare-photos"
+        # --memory-swap equal to --memory means zero swap allowed
         lib.shell(f"docker update --memory {mem} --memory-swap {mem} {rustfs}")
         print(f"  RustFS memory set to {mem}")
 
