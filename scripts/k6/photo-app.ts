@@ -1,7 +1,7 @@
 /**
  * Photo app load test — k6
  *
- * Simulates realistic photo app traffic against bench_service.py:
+ * Mixed workload against photoshare:
  *   upload  10%  POST /photos          — postgres + S3 write
  *   view    50%  GET  /photos/{id}     — postgres read + S3 read
  *   list    30%  GET  /photos?page=N   — postgres paginated query
@@ -9,16 +9,15 @@
  *
  * Usage:
  *   k6 run --duration 10m --vus 20 scripts/k6/photo-app.ts
- *   k6 run --duration 1h  --vus 20 --rps 1000 scripts/k6/photo-app.ts
  */
 
 import http from "k6/http";
-import { check, sleep } from "k6";
+import { check } from "k6";
 import { Counter, Rate, Trend } from "k6/metrics";
+import { SharedArray } from "k6/data";
 
 const BASE = __ENV.BASE_URL || "http://127.0.0.1:8080";
 
-// Custom metrics per operation
 const uploadDuration = new Trend("upload_duration", true);
 const viewDuration = new Trend("view_duration", true);
 const listDuration = new Trend("list_duration", true);
@@ -34,9 +33,6 @@ const SEARCH_WORDS = [
   "garden", "portrait", "street", "night", "morning", "autumn", "spring",
 ];
 
-// Track max photo id for view requests
-let maxId = 0;
-
 export const options = {
   scenarios: {
     photo_app: {
@@ -49,27 +45,33 @@ export const options = {
     },
   },
   thresholds: {
-    error_rate: ["rate<0.01"],          // <1% errors
-    upload_duration: ["p(99)<500"],      // p99 < 500ms
-    view_duration: ["p(99)<200"],        // p99 < 200ms
-    list_duration: ["p(99)<100"],        // p99 < 100ms
-    search_duration: ["p(99)<200"],      // p99 < 200ms
+    error_rate: ["rate<0.01"],
+    upload_duration: ["p(99)<500"],
+    view_duration: ["p(99)<200"],
+    list_duration: ["p(99)<100"],
+    search_duration: ["p(99)<200"],
   },
 };
 
-// Seed: upload some initial photos so view/list/search have data
-export function setup(): void {
-  console.log("Seeding 200 photos...");
+// Seed photos and collect their IDs for view requests
+const seededIds = new SharedArray("photo_ids", function () {
+  const ids: string[] = [];
   for (let i = 0; i < 200; i++) {
     const res = http.post(`${BASE}/photos`);
-    if (res.status === 200) {
-      const body = JSON.parse(res.body as string);
-      if (body.id > maxId) maxId = body.id;
+    if (res.status >= 200 && res.status < 300) {
+      try {
+        const body = JSON.parse(res.body as string);
+        ids.push(body.id);
+      } catch (_) {}
     }
   }
-  console.log(`Seeded. maxId=${maxId}`);
-  return { maxId };
-}
+  console.log(`Seeded ${ids.length} photos`);
+  return ids;
+});
+
+// Collect IDs from uploads during the test for view requests.
+// SharedArray is read-only so we use a module-level array.
+const runtimeIds: string[] = [];
 
 function pickOp(): string {
   const r = Math.random() * 100;
@@ -79,15 +81,24 @@ function pickOp(): string {
   return "search";
 }
 
-export default function (data: { maxId: number }): void {
+function randomId(): string {
+  // Prefer runtime IDs (more recent), fall back to seeded
+  if (runtimeIds.length > 0 && Math.random() < 0.5) {
+    return runtimeIds[Math.floor(Math.random() * runtimeIds.length)];
+  }
+  return seededIds[Math.floor(Math.random() * seededIds.length)];
+}
+
+export default function (): void {
   const op = pickOp();
-  let currentMaxId = Math.max(data.maxId, maxId, 1);
 
   switch (op) {
     case "upload": {
       const res = http.post(`${BASE}/photos`);
       uploadDuration.add(res.timings.duration);
-      const ok = check(res, { "upload 2xx": (r) => r.status === 200 });
+      const ok = check(res, {
+        "upload 2xx": (r) => r.status >= 200 && r.status < 300,
+      });
       if (!ok) {
         uploadErrors.add(1);
         errorRate.add(true);
@@ -95,13 +106,15 @@ export default function (data: { maxId: number }): void {
         errorRate.add(false);
         try {
           const body = JSON.parse(res.body as string);
-          if (body.id > maxId) maxId = body.id;
+          if (body.id && runtimeIds.length < 10000) {
+            runtimeIds.push(body.id);
+          }
         } catch (_) {}
       }
       break;
     }
     case "view": {
-      const id = Math.floor(Math.random() * currentMaxId) + 1;
+      const id = randomId();
       const res = http.get(`${BASE}/photos/${id}`);
       viewDuration.add(res.timings.duration);
       const ok = check(res, {

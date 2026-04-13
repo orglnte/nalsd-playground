@@ -36,6 +36,7 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
     k6_script = "scripts/k6/photo-app.ts"
     repo = REPO
     results_base = Path("tmp/load_test_results")
+    monitor_interval = 30
 
     def add_arguments(self, parser):
         parser.add_argument("--rustfs-mem", default="1g")
