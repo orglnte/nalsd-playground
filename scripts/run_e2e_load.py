@@ -55,12 +55,12 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
         )
         time.sleep(1.5)
 
-        # Provision via photoshare
-        print("  provisioning containers...")
-        prov_log = open(self.results_dir / "photoshare_provision.log", "w")
-        prov = subprocess.Popen(
+        # Start photoshare (provisions containers + serves on :8080)
+        print("  starting photoshare (provisions containers + serves)...")
+        self._app_log = open(self.results_dir / "photoshare.log", "w")
+        self._app = subprocess.Popen(
             f"{VENV_PYTHON} -m photoshare",
-            shell=True, stdout=prov_log, stderr=subprocess.STDOUT,
+            shell=True, stdout=self._app_log, stderr=subprocess.STDOUT,
             cwd=str(REPO), preexec_fn=os.setsid,
         )
 
@@ -73,43 +73,25 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
             time.sleep(2)
         else:
             print("  ERROR: containers did not start")
+            print("  log:", (self.results_dir / "photoshare.log").read_text()[-500:])
             return None
 
-        if not lib.wait_for_port(15432, timeout=60):
-            print("  ERROR: postgres not ready")
+        # Wait for photoshare to be ready on :8080
+        if not lib.wait_for_port(8080, timeout=120):
+            print("  ERROR: photoshare not ready on :8080")
+            print("  log:", (self.results_dir / "photoshare.log").read_text()[-500:])
             return None
-        if not lib.wait_for_port(19000, timeout=60):
-            print("  ERROR: RustFS not ready")
-            return None
-        print("  containers up.")
-
-        # Kill photoshare (only needed for provisioning)
-        os.killpg(os.getpgid(prov.pid), signal.SIGTERM)
-        prov.wait(timeout=5)
-        prov_log.close()
+        print(f"  photoshare up (PID {self._app.pid})")
 
         # Raise RustFS memory
         mem = self.args.rustfs_mem
         lib.shell(f"docker update --memory {mem} --memory-swap {mem} nalsd-photoshare-images")
         print(f"  RustFS memory set to {mem}")
 
-        # Start bench_service
-        self._bench_log = open(self.results_dir / "bench_service.log", "w")
-        self._bench = subprocess.Popen(
-            f"{VENV_PYTHON} scripts/bench_service.py",
-            shell=True, stdout=self._bench_log, stderr=subprocess.STDOUT,
-            cwd=str(REPO), preexec_fn=os.setsid,
-        )
-        if not lib.wait_for_port(8090, timeout=15):
-            print("  ERROR: bench_service not ready")
-            print("  log:", (self.results_dir / "bench_service.log").read_text()[-500:])
-            return None
-        print(f"  bench_service up (PID {self._bench.pid})")
-
-        return self._bench.pid
+        return self._app.pid
 
     def smoke(self) -> bool:
-        r = lib.shell("curl -s --max-time 5 -X POST http://127.0.0.1:8090/photos", check=False)
+        r = lib.shell("curl -s --max-time 5 -X POST http://127.0.0.1:8080/photos", check=False)
         if r.returncode != 0 or "id" not in r.stdout:
             print(f"  failed: {r.stdout}")
             return False
@@ -117,9 +99,9 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
         return True
 
     def teardown(self):
-        self._bench.terminate()
-        self._bench.wait(timeout=5)
-        self._bench_log.close()
+        os.killpg(os.getpgid(self._app.pid), signal.SIGTERM)
+        self._app.wait(timeout=5)
+        self._app_log.close()
         self._platformd.terminate()
         self._platformd.wait(timeout=5)
         self._platformd_log.close()

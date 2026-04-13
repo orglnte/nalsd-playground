@@ -16,7 +16,7 @@ import http from "k6/http";
 import { check, sleep } from "k6";
 import { Counter, Rate, Trend } from "k6/metrics";
 
-const BASE = __ENV.BASE_URL || "http://127.0.0.1:8090";
+const BASE = __ENV.BASE_URL || "http://127.0.0.1:8080";
 
 // Custom metrics per operation
 const uploadDuration = new Trend("upload_duration", true);

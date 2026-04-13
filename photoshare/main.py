@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import io
 import logging
+import random
 import uuid
 from contextlib import contextmanager
 from typing import Iterator
 
 import psycopg
-from fastapi import FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from minio import Minio
 from minio.error import S3Error
 
@@ -78,34 +79,78 @@ def create_app(
             "acquired_blocks": blocks,
         }
 
-    @app.get("/photos")
-    def list_photos() -> list[dict]:
+    @app.get("/photos/search")
+    def search_photos(q: str = Query(default="")) -> dict:
+        if not q:
+            q = random.choice(["sunset", "beach", "mountain", "city", "forest"])
         with _pg(db) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, filename, content_type, size_bytes, "
-                    "uploaded_at FROM photos ORDER BY uploaded_at DESC"
+                    "SELECT id, title, filename, uploaded_at FROM photos "
+                    "WHERE to_tsvector('english', title) @@ plainto_tsquery('english', %s) "
+                    "ORDER BY uploaded_at DESC LIMIT 20",
+                    (q,),
                 )
                 rows = cur.fetchall()
-        return [
-            {
-                "id": row[0],
-                "filename": row[1],
-                "content_type": row[2],
-                "size_bytes": row[3],
-                "uploaded_at": row[4].isoformat(),
-            }
-            for row in rows
-        ]
+        return {
+            "query": q,
+            "count": len(rows),
+            "photos": [{"id": r[0], "title": r[1], "filename": r[2]} for r in rows],
+        }
+
+    @app.get("/photos")
+    def list_photos(page: int = Query(default=0, ge=0)) -> dict:
+        limit = 20
+        offset = page * limit
+        with _pg(db) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, title, filename, size_bytes, uploaded_at "
+                    "FROM photos ORDER BY uploaded_at DESC LIMIT %s OFFSET %s",
+                    (limit, offset),
+                )
+                rows = cur.fetchall()
+        return {
+            "page": page,
+            "count": len(rows),
+            "photos": [
+                {
+                    "id": row[0],
+                    "title": row[1],
+                    "filename": row[2],
+                    "size_bytes": row[3],
+                    "uploaded_at": row[4].isoformat(),
+                }
+                for row in rows
+            ],
+        }
 
     if store is not None:
         assert minio_client is not None and bucket_name is not None
 
+        _WORDS = [
+            "sunset", "beach", "mountain", "city", "forest", "river",
+            "snow", "garden", "portrait", "street", "night", "morning",
+        ]
+
+        def _random_title() -> str:
+            return " ".join(random.choices(_WORDS, k=random.randint(2, 4)))
+
         @app.post("/photos", status_code=201)
-        async def upload_photo(file: UploadFile = File(...)) -> dict:
-            data = await file.read()
+        async def upload_photo(file: UploadFile | None = File(None)) -> dict:
             photo_id = uuid.uuid4().hex
-            content_type = file.content_type or "application/octet-stream"
+            title = _random_title()
+
+            if file is not None:
+                data = await file.read()
+                content_type = file.content_type or "application/octet-stream"
+                filename = file.filename or photo_id
+            else:
+                # Simple mode for load testing: 1 KB synthetic payload
+                data = b"x" * 1000
+                content_type = "application/octet-stream"
+                filename = f"{photo_id}.bin"
+
             size = len(data)
             minio_client.put_object(
                 bucket_name,
@@ -118,15 +163,15 @@ def create_app(
                 with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO photos (id, filename, content_type, "
-                        "size_bytes) VALUES (%s, %s, %s, %s)",
-                        (photo_id, file.filename or photo_id, content_type, size),
+                        "size_bytes, title) VALUES (%s, %s, %s, %s, %s)",
+                        (photo_id, filename, content_type, size, title),
                     )
                 conn.commit()
             return {
                 "id": photo_id,
-                "filename": file.filename,
+                "title": title,
+                "filename": filename,
                 "size_bytes": size,
-                "content_type": content_type,
             }
 
         @app.get("/photos/{photo_id}")
