@@ -24,12 +24,12 @@ HOST = os.environ.get("BACKEND_HOST", "127.0.0.1")
 
 PG_DSN = (
     f"postgresql://platform:platform-local-password"
-    f"@{HOST}:15432/appdb"
+    f"@{HOST}:15432/photos"
 )
 S3_ENDPOINT = f"http://{HOST}:19000"
-S3_KEY = "anonymous"
-S3_SECRET = "anonymous"
-S3_BUCKET = "store"
+S3_KEY = "platform"
+S3_SECRET = "platform-local-password"
+S3_BUCKET = "images"
 S3_REGION = "us-east-1"
 
 PAYLOAD = b"x" * 300

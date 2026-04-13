@@ -232,13 +232,10 @@ class PulumiDockerEngine:
             client.close()
 
     def _check_rustfs(self, backend: BackendConfig) -> bool:
-        if not self._tcp_open(backend.host_port):
-            return False
-        import urllib.request
-
-        url = f"http://{self._host}:{backend.host_port}/minio/health/live"
-        with urllib.request.urlopen(url, timeout=2) as resp:
-            return resp.status == 200
+        # RustFS requires auth on all HTTP endpoints including health.
+        # TCP connectivity is sufficient — if the port accepts connections
+        # the server is ready to handle S3 requests.
+        return self._tcp_open(backend.host_port)
 
     def _build_credentials(
         self, spec: BlockSpec, backend: BackendConfig
