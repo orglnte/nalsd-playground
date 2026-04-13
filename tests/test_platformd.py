@@ -28,7 +28,7 @@ from platformd.config import load_daemon_config
 from platformd.identities import Identities, UnknownPeerError, load_identities
 from platformd.scope_store import ScopeNotFoundError, ScopeStore
 from platformd.server import Server
-from platformd.session import RECORD_MAX_BLOCKS, Session
+from platformd.session import RECORD_MAX_BLOCKS, EnforcingSession, RecordingSession, Session
 
 
 @dataclass
@@ -232,7 +232,7 @@ def _scope(**overrides: Any) -> ServiceScope:
 def test_session_scope_must_match_service_id() -> None:
     scope = ServiceScope(service_id="other", allowed_blocks={BlockType.OBJECT_STORE})
     with pytest.raises(ValueError, match="does not match"):
-        Session(service_id="demo", scope=scope, engine=FakeEngine())
+        EnforcingSession("demo", FakeEngine(), scope)
 
 
 def test_session_enforces_scope() -> None:
@@ -240,13 +240,13 @@ def test_session_enforces_scope() -> None:
         service_id="demo",
         allowed_blocks={BlockType.TRANSACTIONAL_STORE},
     )
-    session = Session(service_id="demo", scope=scope, engine=FakeEngine())
+    session = EnforcingSession("demo", FakeEngine(), scope)
     with pytest.raises(UnknownBlockError):
         session.acquire(BlockType.OBJECT_STORE, name="images")
 
 
 def test_session_drop_blocks_subsequent_acquire() -> None:
-    session = Session(service_id="demo", scope=_scope(), engine=FakeEngine())
+    session = EnforcingSession("demo", FakeEngine(), _scope())
     session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
     session.drop_to_scaling_only()
     with pytest.raises(PrivilegeDroppedError):
@@ -255,35 +255,21 @@ def test_session_drop_blocks_subsequent_acquire() -> None:
 
 # --- record mode ---
 
-def test_session_record_mode_requires_output_path() -> None:
-    with pytest.raises(ValueError, match="record mode requires"):
-        Session(service_id="demo", engine=FakeEngine(), mode="record")
-
-
-def test_session_record_mode_rejects_unknown_mode() -> None:
-    with pytest.raises(ValueError, match="unknown session mode"):
-        Session(
-            service_id="demo",
-            engine=FakeEngine(),
-            scope=_scope(),
-            mode="audit",
-        )
-
-
-def test_session_record_mode_enforce_mode_still_requires_scope() -> None:
-    with pytest.raises(ValueError, match="enforce mode requires"):
-        Session(service_id="demo", engine=FakeEngine(), mode="enforce")
+def test_session_subclass_constructors_enforce_invariants() -> None:
+    """EnforcingSession requires a scope; RecordingSession requires an output
+    path. These are enforced by the constructor signatures — no mode string."""
+    # EnforcingSession without scope → TypeError (positional arg missing)
+    with pytest.raises(TypeError):
+        EnforcingSession("demo", FakeEngine())  # type: ignore[call-arg]
+    # RecordingSession without output → TypeError
+    with pytest.raises(TypeError):
+        RecordingSession("demo", FakeEngine())  # type: ignore[call-arg]
 
 
 def test_session_record_mode_accumulates_and_writes_on_drop(tmp_path: Path) -> None:
     out = tmp_path / "demo.recorded.toml"
     engine = FakeEngine()
-    session = Session(
-        service_id="demo",
-        engine=engine,
-        mode="record",
-        recording_output=out,
-    )
+    session = RecordingSession("demo", engine, out)
     # No scope required and no BlockType restriction — record captures all.
     session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
     session.acquire(BlockType.OBJECT_STORE, name="images")
@@ -311,12 +297,7 @@ def test_session_record_mode_writes_on_shutdown_without_drop(tmp_path: Path) -> 
     a usable recording — the operator can see what it asked for before
     the crash."""
     out = tmp_path / "demo.recorded.toml"
-    session = Session(
-        service_id="demo",
-        engine=FakeEngine(),
-        mode="record",
-        recording_output=out,
-    )
+    session = RecordingSession("demo", FakeEngine(), out)
     session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
     session.shutdown()
 
@@ -330,12 +311,7 @@ def test_session_record_mode_drop_then_shutdown_writes_once(tmp_path: Path) -> N
     must not write again (the _recording_written guard), so the operator
     sees exactly one authoritative draft per recording run."""
     out = tmp_path / "demo.recorded.toml"
-    session = Session(
-        service_id="demo",
-        engine=FakeEngine(),
-        mode="record",
-        recording_output=out,
-    )
+    session = RecordingSession("demo", FakeEngine(), out)
     session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
     session.drop_to_scaling_only()
     first = out.read_text()
@@ -346,12 +322,7 @@ def test_session_record_mode_drop_then_shutdown_writes_once(tmp_path: Path) -> N
 
 def test_session_record_mode_no_acquires_skips_write(tmp_path: Path) -> None:
     out = tmp_path / "demo.recorded.toml"
-    session = Session(
-        service_id="demo",
-        engine=FakeEngine(),
-        mode="record",
-        recording_output=out,
-    )
+    session = RecordingSession("demo", FakeEngine(), out)
     session.drop_to_scaling_only()
     assert not out.exists()
 
@@ -360,12 +331,7 @@ def test_session_record_mode_ceiling_enforced(tmp_path: Path) -> None:
     """Record mode still has a hard ceiling so a runaway service cannot
     drive arbitrary resource usage just because an operator opted in."""
     out = tmp_path / "demo.recorded.toml"
-    session = Session(
-        service_id="demo",
-        engine=FakeEngine(),
-        mode="record",
-        recording_output=out,
-    )
+    session = RecordingSession("demo", FakeEngine(), out)
     for i in range(RECORD_MAX_BLOCKS):
         session.acquire(BlockType.TRANSACTIONAL_STORE, name=f"db{i}", database="d")
     with pytest.raises(QuotaExceededError, match="record-mode ceiling"):

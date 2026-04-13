@@ -19,7 +19,7 @@ from platformd.auth import peer_uid
 from platformd.config import DaemonConfig
 from platformd.identities import Identities, UnknownPeerError
 from platformd.scope_store import ScopeNotFoundError, ScopeStore
-from platformd.session import Session
+from platformd.session import EnforcingSession, RecordingSession, Session
 
 log = logging.getLogger("platformd.server")
 
@@ -100,28 +100,22 @@ class Server:
             return
 
         mode = self._config.mode_for(service_id)
+        engine = self._engine_for(service_id)
         try:
             if mode == "record":
-                scope = None
                 recording_output = (
                     self._config.scope_dir / f"{service_id}.recorded.toml"
                 )
+                session: Session = RecordingSession(
+                    service_id, engine, recording_output,
+                )
             else:
                 scope = self._scope_store.get(service_id)
-                recording_output = None
+                session = EnforcingSession(service_id, engine, scope)
         except (ScopeNotFoundError, ValueError) as e:
             log.warning("rejecting connection: %s", e)
             _write(conn, error_response(None, e))
             return
-
-        engine = self._engine_for(service_id)
-        session = Session(
-            service_id=service_id,
-            engine=engine,
-            scope=scope,
-            mode=mode,
-            recording_output=recording_output,
-        )
         log.info(
             "session start: service=%s uid=%d mode=%s", service_id, uid, mode
         )

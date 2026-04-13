@@ -11,11 +11,13 @@ JSON-RPC. Identity is established by SO_PEERCRED (Linux) or getpeereid
 from platformd.config import DaemonConfig, load_daemon_config
 from platformd.identities import Identities, load_identities
 from platformd.scope_store import ScopeStore
-from platformd.session import Session
+from platformd.session import EnforcingSession, RecordingSession, Session
 
 __all__ = [
     "DaemonConfig",
+    "EnforcingSession",
     "Identities",
+    "RecordingSession",
     "ScopeStore",
     "Session",
     "load_daemon_config",

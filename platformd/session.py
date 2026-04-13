@@ -31,70 +31,22 @@ class Session:
     """
     Per-connection session state inside the daemon.
 
-    In enforce mode (the default) the session is constructed with a
-    ServiceScope from the ScopeStore, looked up by authenticated
-    service_id. Every acquire() is checked against that scope.
-
-    In record mode the session has no scope: acquires are recorded and
-    gated only by (a) the BlockType enum whitelist, which the wire-level
-    decode already enforces, and (b) RECORD_MAX_BLOCKS. On
-    drop_to_scaling_only() or shutdown() the accumulated acquires are
-    written to recording_output as a .recorded.toml file that the
-    operator reviews and renames to promote the service to enforce mode.
+    Base class owns the state machine (ACQUIRING → OPERATIONAL → SHUTDOWN),
+    lease bookkeeping, and provision dispatch. Subclasses implement the
+    acquire-time policy: EnforcingSession checks a scope, RecordingSession
+    logs and records.
     """
 
-    def __init__(
-        self,
-        service_id: str,
-        engine: Engine,
-        *,
-        scope: ServiceScope | None = None,
-        mode: str = "enforce",
-        recording_output: Path | None = None,
-    ) -> None:
-        if mode not in {"enforce", "record"}:
-            raise ValueError(
-                f"unknown session mode '{mode}' (must be 'enforce' or 'record')"
-            )
-        if mode == "enforce":
-            if scope is None:
-                raise ValueError("enforce mode requires a scope")
-            if scope.service_id != service_id:
-                raise ValueError(
-                    f"scope.service_id='{scope.service_id}' does not match "
-                    f"authenticated service_id='{service_id}'"
-                )
-        else:
-            if recording_output is None:
-                raise ValueError(
-                    "record mode requires a recording_output path so the "
-                    "observed scope can be persisted for review"
-                )
-            log.warning(
-                "session in RECORD mode: service=%s — scope will be derived "
-                "from acquire() calls, output=%s",
-                service_id,
-                recording_output,
-            )
-
+    def __init__(self, service_id: str, engine: Engine) -> None:
         self.service_id = service_id
-        self._scope = scope
         self._engine = engine
-        self._mode = mode
-        self._recording_output = recording_output
         self._state = PrivilegeState.ACQUIRING
         self._leases: dict[str, BlockSpec] = {}
         self._credentials: dict[str, Credentials] = {}
-        self._recorded_order: list[str] = []
-        self._recording_written = False
 
     @property
     def state(self) -> PrivilegeState:
         return self._state
-
-    @property
-    def mode(self) -> str:
-        return self._mode
 
     def acquire(
         self,
@@ -111,24 +63,7 @@ class Session:
             )
 
         bt = BlockType(block_type) if isinstance(block_type, str) else block_type
-
-        if self._mode == "record":
-            if len(self._leases) >= RECORD_MAX_BLOCKS:
-                raise QuotaExceededError(
-                    f"service '{self.service_id}' reached record-mode "
-                    f"ceiling max_blocks={RECORD_MAX_BLOCKS}"
-                )
-            log.warning(
-                "RECORD: service=%s acquire block=%s name=%s profile=%s "
-                "(no scope enforcement, recording only)",
-                self.service_id,
-                bt.value,
-                name,
-                profile,
-            )
-        else:
-            assert self._scope is not None
-            self._scope.check(bt, current_count=len(self._leases))
+        self._check_acquire(bt)
 
         if name in self._leases:
             existing = self._leases[name]
@@ -152,8 +87,7 @@ class Session:
         credentials = self._engine.provision(spec, existing_leases=prospective)
         self._leases[name] = spec
         self._credentials[name] = credentials
-        if self._mode == "record":
-            self._recorded_order.append(name)
+        self._post_acquire(name)
         return credentials
 
     def drop_to_scaling_only(self) -> None:
@@ -167,8 +101,7 @@ class Session:
             self.service_id,
             len(self._leases),
         )
-        if self._mode == "record":
-            self._write_recording()
+        self._on_drop()
         self._state = PrivilegeState.OPERATIONAL
 
     def scale_hint(self, name: str, *, load_factor: float) -> None:
@@ -196,15 +129,80 @@ class Session:
             self.service_id,
             len(self._leases),
         )
-        # If the service disconnects without dropping, still persist what
-        # we learned — a recording run whose service crashed is still a
-        # useful starting point for the operator.
-        if self._mode == "record" and not self._recording_written:
-            self._write_recording()
+        self._on_shutdown()
         self._state = PrivilegeState.SHUTDOWN
 
+    # -- hooks for subclasses --
+
+    def _check_acquire(self, bt: BlockType) -> None:
+        """Called before provisioning. Raise to reject."""
+
+    def _post_acquire(self, name: str) -> None:
+        """Called after a successful provision."""
+
+    def _on_drop(self) -> None:
+        """Called when transitioning to OPERATIONAL."""
+
+    def _on_shutdown(self) -> None:
+        """Called on session shutdown."""
+
+
+class EnforcingSession(Session):
+    """Checks every acquire() against a pre-loaded ServiceScope."""
+
+    def __init__(self, service_id: str, engine: Engine, scope: ServiceScope) -> None:
+        if scope.service_id != service_id:
+            raise ValueError(
+                f"scope.service_id='{scope.service_id}' does not match "
+                f"authenticated service_id='{service_id}'"
+            )
+        super().__init__(service_id, engine)
+        self._scope = scope
+
+    def _check_acquire(self, bt: BlockType) -> None:
+        self._scope.check(bt, current_count=len(self._leases))
+
+
+class RecordingSession(Session):
+    """Records acquire() calls and writes a .recorded.toml on drop/shutdown."""
+
+    def __init__(
+        self, service_id: str, engine: Engine, recording_output: Path
+    ) -> None:
+        super().__init__(service_id, engine)
+        self._recording_output = recording_output
+        self._recorded_order: list[str] = []
+        self._recording_written = False
+        log.warning(
+            "session in RECORD mode: service=%s — scope will be derived "
+            "from acquire() calls, output=%s",
+            service_id,
+            recording_output,
+        )
+
+    def _check_acquire(self, bt: BlockType) -> None:
+        if len(self._leases) >= RECORD_MAX_BLOCKS:
+            raise QuotaExceededError(
+                f"service '{self.service_id}' reached record-mode "
+                f"ceiling max_blocks={RECORD_MAX_BLOCKS}"
+            )
+        log.warning(
+            "RECORD: service=%s acquire block=%s (no scope enforcement, recording only)",
+            self.service_id,
+            bt.value,
+        )
+
+    def _post_acquire(self, name: str) -> None:
+        self._recorded_order.append(name)
+
+    def _on_drop(self) -> None:
+        self._write_recording()
+
+    def _on_shutdown(self) -> None:
+        if not self._recording_written:
+            self._write_recording()
+
     def _write_recording(self) -> None:
-        assert self._recording_output is not None
         if not self._recorded_order:
             log.info(
                 "RECORD: service=%s — no acquires observed; skipping write",
