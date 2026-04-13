@@ -14,7 +14,6 @@
 import http from "k6/http";
 import { check } from "k6";
 import { Counter, Rate, Trend } from "k6/metrics";
-import { SharedArray } from "k6/data";
 
 const BASE = __ENV.BASE_URL || "http://127.0.0.1:8080";
 
@@ -53,25 +52,23 @@ export const options = {
   },
 };
 
-// Seed photos and collect their IDs for view requests
-const seededIds = new SharedArray("photo_ids", function () {
+// Populated by setup(), passed to default function via data arg
+let photoIds: string[] = [];
+
+export function setup(): { ids: string[] } {
   const ids: string[] = [];
+  console.log("Seeding 200 photos...");
   for (let i = 0; i < 200; i++) {
     const res = http.post(`${BASE}/photos`);
     if (res.status >= 200 && res.status < 300) {
       try {
-        const body = JSON.parse(res.body as string);
-        ids.push(body.id);
+        ids.push(JSON.parse(res.body as string).id);
       } catch (_) {}
     }
   }
   console.log(`Seeded ${ids.length} photos`);
-  return ids;
-});
-
-// Collect IDs from uploads during the test for view requests.
-// SharedArray is read-only so we use a module-level array.
-const runtimeIds: string[] = [];
+  return { ids };
+}
 
 function pickOp(): string {
   const r = Math.random() * 100;
@@ -81,15 +78,11 @@ function pickOp(): string {
   return "search";
 }
 
-function randomId(): string {
-  // Prefer runtime IDs (more recent), fall back to seeded
-  if (runtimeIds.length > 0 && Math.random() < 0.5) {
-    return runtimeIds[Math.floor(Math.random() * runtimeIds.length)];
+export default function (data: { ids: string[] }): void {
+  // Merge seeded IDs into module-level array once
+  if (photoIds.length === 0 && data.ids.length > 0) {
+    photoIds = data.ids.slice();
   }
-  return seededIds[Math.floor(Math.random() * seededIds.length)];
-}
-
-export default function (): void {
   const op = pickOp();
 
   switch (op) {
@@ -106,15 +99,17 @@ export default function (): void {
         errorRate.add(false);
         try {
           const body = JSON.parse(res.body as string);
-          if (body.id && runtimeIds.length < 10000) {
-            runtimeIds.push(body.id);
+          if (body.id && photoIds.length < 10000) {
+            photoIds.push(body.id);
           }
         } catch (_) {}
       }
       break;
     }
     case "view": {
-      const id = randomId();
+      const id = photoIds.length > 0
+        ? photoIds[Math.floor(Math.random() * photoIds.length)]
+        : "nonexistent";
       const res = http.get(`${BASE}/photos/${id}`);
       viewDuration.add(res.timings.duration);
       const ok = check(res, {
