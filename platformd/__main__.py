@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
 
     server = build_server(args.config)
 
-    def _shutdown(signum, frame):
+    def _shutdown(signum: int, frame: object) -> None:
         logging.getLogger("platformd").info("signal %d, shutting down", signum)
         server.stop()
 

@@ -66,7 +66,7 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     # service and platformd provisions a new MinIO container mid-lifecycle;
     # main.py then sees `store is not None` and registers the upload
     # endpoints that were absent in v1.
-    store: Credentials | None = platform.acquire(BlockType.OBJECT_STORE, name="photos")
+    store = platform.acquire(BlockType.OBJECT_STORE, name="photos")
     log.info(
         "bootstrap: object-store 'photos' acquired at %s:%d",
         store.host,

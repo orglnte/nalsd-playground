@@ -13,6 +13,7 @@ import io
 import logging
 import random
 import uuid
+from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from minio import Minio
@@ -68,7 +69,7 @@ def create_app(
     app.state.bucket = bucket_name
 
     @app.get("/health")
-    def health() -> dict:
+    def health() -> dict[str, Any]:
         blocks = {"transactional-store": db.name}
         if store is not None:
             blocks["object-store"] = store.name
@@ -78,7 +79,7 @@ def create_app(
         }
 
     @app.get("/photos/search")
-    def search_photos(q: str = Query(default="")) -> dict:
+    def search_photos(q: str = Query(default="")) -> dict[str, Any]:
         if not q:
             q = random.choice(["sunset", "beach", "mountain", "city", "forest"])
         with pool.connection() as conn, conn.cursor() as cur:
@@ -96,7 +97,7 @@ def create_app(
         }
 
     @app.get("/photos")
-    def list_photos(page: int = Query(default=0, ge=0)) -> dict:
+    def list_photos(page: int = Query(default=0, ge=0)) -> dict[str, Any]:
         limit = 20
         offset = page * limit
         with pool.connection() as conn, conn.cursor() as cur:
@@ -146,7 +147,7 @@ def create_app(
         _UPLOAD_FILE_DEFAULT = File(None)
 
         @app.post("/photos", status_code=201)
-        async def upload_photo(file: UploadFile | None = _UPLOAD_FILE_DEFAULT) -> dict:
+        async def upload_photo(file: UploadFile | None = _UPLOAD_FILE_DEFAULT) -> dict[str, Any]:
             photo_id = uuid.uuid4().hex
             title = _random_title()
 
@@ -208,7 +209,7 @@ def create_app(
     else:
 
         @app.post("/photos", status_code=503)
-        def upload_disabled() -> dict:
+        def upload_disabled() -> dict[str, Any]:
             raise HTTPException(
                 status_code=503,
                 detail=(

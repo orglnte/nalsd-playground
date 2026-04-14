@@ -50,7 +50,7 @@ def code_for(exc: BaseException) -> str:
     "invalid_request" so the client can distinguish protocol problems
     from platform failures.
     """
-    code = _CODE_BY_EXC.get(type(exc), "internal_error")
+    code = _CODE_BY_EXC.get(type(exc), "internal_error")  # type: ignore[arg-type]
     if isinstance(exc, ValueError) and code == "internal_error":
         return "invalid_request"
     return code

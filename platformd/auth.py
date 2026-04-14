@@ -15,9 +15,10 @@ def peer_uid(sock: socket.socket) -> int:
     """
     system = platform.system()
     if system == "Linux":
-        data = sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        so_peercred: int = socket.SO_PEERCRED  # type: ignore[attr-defined]
+        data = sock.getsockopt(socket.SOL_SOCKET, so_peercred, struct.calcsize("3i"))
         _pid, uid, _gid = struct.unpack("3i", data)
-        return uid
+        return int(uid)
     if system == "Darwin":
         libc = ctypes.CDLL("libc.dylib", use_errno=True)
         uid = ctypes.c_uint32()

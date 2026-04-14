@@ -60,7 +60,10 @@ def apply_manifesto(credentials: Credentials, manifesto_dir: Path) -> list[str]:
         conn.commit()
 
         for path in files:
-            version = _VERSION_RE.match(path.name).group(1)
+            match = _VERSION_RE.match(path.name)
+            if match is None:
+                raise ValueError(f"manifesto: filename {path.name!r} does not match vNNN_ pattern")
+            version = match.group(1)
             if version in already:
                 log.info("manifesto: skipping %s (already applied)", version)
                 continue

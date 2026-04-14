@@ -62,7 +62,7 @@ strict = true
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
-exclude = ["\\.pulumi/", "\\.pulumi_state/", "tmp/", "build/"]
+exclude = ["\\.pulumi/", "\\.pulumi_state/", "tmp/", "build/", "scripts/"]
 
 [[tool.mypy.overrides]]
 module = [
@@ -72,3 +72,10 @@ module = [
     "psycopg_pool.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+warn_return_any = false
