@@ -85,9 +85,7 @@ class Client:
         profile: str = "minimal",
         **params: Any,
     ) -> Credentials:
-        bt_value = (
-            block_type.value if isinstance(block_type, BlockType) else block_type
-        )
+        bt_value = block_type.value if isinstance(block_type, BlockType) else block_type
         result = self._call(
             "Acquire",
             {
@@ -110,7 +108,7 @@ class Client:
             return
         try:
             self._call("Shutdown", {})
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         finally:
             self.close()
@@ -126,16 +124,14 @@ class Client:
         line = self._reader.readline()
         if not line:
             from platform_api.errors import ProvisioningError
-            raise ProvisioningError(
-                f"platformd closed the connection during {method}"
-            )
+
+            raise ProvisioningError(f"platformd closed the connection during {method}")
         try:
             response = json.loads(line.decode("utf-8"))
         except json.JSONDecodeError as e:
             from platform_api.errors import ProvisioningError
-            raise ProvisioningError(
-                f"malformed response from platformd: {e}"
-            ) from e
+
+            raise ProvisioningError(f"malformed response from platformd: {e}") from e
 
         if "error" in response:
             err = response["error"]

@@ -1,15 +1,15 @@
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class BlockType(str, Enum):
+class BlockType(StrEnum):
     TRANSACTIONAL_STORE = "transactional-store"
     OBJECT_STORE = "object-store"
     EPHEMERAL_KV_CACHE = "ephemeral-kv-cache"
 
 
-class PrivilegeState(str, Enum):
+class PrivilegeState(StrEnum):
     ACQUIRING = "acquiring"
     OPERATIONAL = "operational"
     SHUTDOWN = "shutdown"
@@ -59,8 +59,7 @@ class ServiceScope:
 
         if block_type not in self.allowed_blocks:
             raise UnknownBlockError(
-                f"service '{self.service_id}' is not permitted to "
-                f"acquire '{block_type.value}'"
+                f"service '{self.service_id}' is not permitted to acquire '{block_type.value}'"
             )
         if current_count >= self.max_blocks:
             raise QuotaExceededError(

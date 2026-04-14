@@ -11,8 +11,8 @@ responsible for translating them into Pulumi Docker resources.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from platform_api.types import BlockSpec, BlockType
 
@@ -31,7 +31,7 @@ class BackendConfig:
     username: str | None
     password: str | None
     database: str | None
-    readiness: "ReadinessCheck"
+    readiness: ReadinessCheck
     tmpfs: dict[str, str] = field(default_factory=dict)
     extras: dict[str, str] = field(default_factory=dict)
 
@@ -61,9 +61,7 @@ def _transactional_store(spec: BlockSpec) -> BackendConfig:
     username = spec.params.get("username", "platform")
     password = spec.params.get("password", "platform-local-password")
     database = spec.params.get("database", "appdb")
-    host_port = spec.params.get(
-        "host_port", DEFAULT_HOST_PORTS[BlockType.TRANSACTIONAL_STORE]
-    )
+    host_port = spec.params.get("host_port", DEFAULT_HOST_PORTS[BlockType.TRANSACTIONAL_STORE])
     return BackendConfig(
         image="postgres:16-alpine",
         container_port=5432,
@@ -78,15 +76,24 @@ def _transactional_store(spec: BlockSpec) -> BackendConfig:
         },
         command=[
             "postgres",
-            "-c", "shared_buffers=16MB",
-            "-c", "max_connections=20",
-            "-c", "effective_cache_size=32MB",
-            "-c", "work_mem=1MB",
-            "-c", "maintenance_work_mem=4MB",
-            "-c", "wal_buffers=1MB",
-            "-c", "fsync=off",
-            "-c", "synchronous_commit=off",
-            "-c", "full_page_writes=off",
+            "-c",
+            "shared_buffers=16MB",
+            "-c",
+            "max_connections=20",
+            "-c",
+            "effective_cache_size=32MB",
+            "-c",
+            "work_mem=1MB",
+            "-c",
+            "maintenance_work_mem=4MB",
+            "-c",
+            "wal_buffers=1MB",
+            "-c",
+            "fsync=off",
+            "-c",
+            "synchronous_commit=off",
+            "-c",
+            "full_page_writes=off",
         ],
         memory_mb=96,
         memory_swap_mb=96,
@@ -103,9 +110,7 @@ def _object_store(spec: BlockSpec) -> BackendConfig:
             f"unsupported profile '{spec.profile}' for object-store "
             "(prototype supports 'minimal' only)"
         )
-    host_port = spec.params.get(
-        "host_port", DEFAULT_HOST_PORTS[BlockType.OBJECT_STORE]
-    )
+    host_port = spec.params.get("host_port", DEFAULT_HOST_PORTS[BlockType.OBJECT_STORE])
     bucket = spec.params.get("bucket", spec.name)
     username = spec.params.get("username", "platform")
     password = spec.params.get("password", "platform-local-password")
@@ -140,9 +145,7 @@ def _ephemeral_kv_cache(spec: BlockSpec) -> BackendConfig:
             "(prototype supports 'minimal' only)"
         )
     password = spec.params.get("password")
-    host_port = spec.params.get(
-        "host_port", DEFAULT_HOST_PORTS[BlockType.EPHEMERAL_KV_CACHE]
-    )
+    host_port = spec.params.get("host_port", DEFAULT_HOST_PORTS[BlockType.EPHEMERAL_KV_CACHE])
     command = ["redis-server", "--maxmemory", "16mb", "--maxmemory-policy", "allkeys-lru"]
     if password:
         command += ["--requirepass", password]

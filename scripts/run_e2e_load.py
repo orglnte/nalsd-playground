@@ -5,6 +5,7 @@ nalsd E2E load test — subclass of PEM's LoadTestOrchestrator.
 Usage:
     python scripts/run_e2e_load.py [--rps 1000] [--duration 10m] [--rustfs-mem 1g]
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import ClassVar
 
 # Unbuffered stdout so live progress shows up when piped
 sys.stdout.reconfigure(line_buffering=True)
@@ -32,7 +34,10 @@ VENV_PYTHON = str(REPO / ".venv/bin/python")
 
 
 class NalsdLoadTest(lib.LoadTestOrchestrator):
-    containers = ["nalsd-photoshare-metadata", "nalsd-photoshare-photos"]
+    containers: ClassVar[list[str]] = [
+        "nalsd-photoshare-metadata",
+        "nalsd-photoshare-photos",
+    ]
     k6_script = "scripts/k6/photo-app.ts"
     repo = REPO
     results_base = Path("tmp/load_test_results")
@@ -46,27 +51,35 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
         for pattern in ["bench_service", "python -m photoshare", "python -m platformd"]:
             subprocess.run(f"pkill -9 -f '{pattern}'", shell=True, capture_output=True)
         for port in [8080, 8090]:
-            subprocess.run(f"kill -9 $(lsof -ti :{port}) 2>/dev/null", shell=True, capture_output=True)
+            subprocess.run(
+                f"kill -9 $(lsof -ti :{port}) 2>/dev/null", shell=True, capture_output=True
+            )
         for name in self.containers:
             subprocess.run(f"docker rm -f {name}", shell=True, capture_output=True)
         time.sleep(0.5)
 
         # Start platformd
-        self._platformd_log = open(self.results_dir / "platformd.log", "w")
+        self._platformd_log = open(self.results_dir / "platformd.log", "w")  # noqa: SIM115
         self._platformd = subprocess.Popen(
             f"{VENV_PYTHON} -m platformd --config dev-config/platformd.toml",
-            shell=True, stdout=self._platformd_log, stderr=subprocess.STDOUT,
-            cwd=str(REPO), preexec_fn=os.setsid,
+            shell=True,
+            stdout=self._platformd_log,
+            stderr=subprocess.STDOUT,
+            cwd=str(REPO),
+            preexec_fn=os.setsid,
         )
         time.sleep(1.5)
 
         # Start photoshare (provisions containers + serves on :8080)
         print("  starting photoshare (provisions containers + serves)...")
-        self._app_log = open(self.results_dir / "photoshare.log", "w")
+        self._app_log = open(self.results_dir / "photoshare.log", "w")  # noqa: SIM115
         self._app = subprocess.Popen(
             f"{VENV_PYTHON} -m photoshare",
-            shell=True, stdout=self._app_log, stderr=subprocess.STDOUT,
-            cwd=str(REPO), preexec_fn=os.setsid,
+            shell=True,
+            stdout=self._app_log,
+            stderr=subprocess.STDOUT,
+            cwd=str(REPO),
+            preexec_fn=os.setsid,
         )
 
         # Wait for containers

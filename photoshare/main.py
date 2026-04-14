@@ -14,15 +14,13 @@ import logging
 import random
 import uuid
 
-import psycopg
-from psycopg_pool import ConnectionPool
 from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
 from minio import Minio
 from minio.error import S3Error
+from psycopg_pool import ConnectionPool
 
 from photoshare.bootstrap import bootstrap
-from platform_api import Credentials
-from platform_api import Client
+from platform_api import Client, Credentials
 
 log = logging.getLogger("photoshare.main")
 
@@ -83,15 +81,14 @@ def create_app(
     def search_photos(q: str = Query(default="")) -> dict:
         if not q:
             q = random.choice(["sunset", "beach", "mountain", "city", "forest"])
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, title, filename, uploaded_at FROM photos "
-                    "WHERE to_tsvector('english', title) @@ plainto_tsquery('english', %s) "
-                    "ORDER BY uploaded_at DESC LIMIT 20",
-                    (q,),
-                )
-                rows = cur.fetchall()
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, filename, uploaded_at FROM photos "
+                "WHERE to_tsvector('english', title) @@ plainto_tsquery('english', %s) "
+                "ORDER BY uploaded_at DESC LIMIT 20",
+                (q,),
+            )
+            rows = cur.fetchall()
         return {
             "query": q,
             "count": len(rows),
@@ -102,14 +99,13 @@ def create_app(
     def list_photos(page: int = Query(default=0, ge=0)) -> dict:
         limit = 20
         offset = page * limit
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id, title, filename, size_bytes, uploaded_at "
-                    "FROM photos ORDER BY uploaded_at DESC LIMIT %s OFFSET %s",
-                    (limit, offset),
-                )
-                rows = cur.fetchall()
+        with pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, title, filename, size_bytes, uploaded_at "
+                "FROM photos ORDER BY uploaded_at DESC LIMIT %s OFFSET %s",
+                (limit, offset),
+            )
+            rows = cur.fetchall()
         return {
             "page": page,
             "count": len(rows),
@@ -126,18 +122,31 @@ def create_app(
         }
 
     if store is not None:
-        assert minio_client is not None and bucket_name is not None
+        assert minio_client is not None
+        assert bucket_name is not None
 
         _WORDS = [
-            "sunset", "beach", "mountain", "city", "forest", "river",
-            "snow", "garden", "portrait", "street", "night", "morning",
+            "sunset",
+            "beach",
+            "mountain",
+            "city",
+            "forest",
+            "river",
+            "snow",
+            "garden",
+            "portrait",
+            "street",
+            "night",
+            "morning",
         ]
 
         def _random_title() -> str:
             return " ".join(random.choices(_WORDS, k=random.randint(2, 4)))
 
+        _UPLOAD_FILE_DEFAULT = File(None)
+
         @app.post("/photos", status_code=201)
-        async def upload_photo(file: UploadFile | None = File(None)) -> dict:
+        async def upload_photo(file: UploadFile | None = _UPLOAD_FILE_DEFAULT) -> dict:
             photo_id = uuid.uuid4().hex
             title = _random_title()
 
@@ -176,22 +185,19 @@ def create_app(
 
         @app.get("/photos/{photo_id}")
         def fetch_photo(photo_id: str) -> Response:
-            with pool.connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT content_type FROM photos WHERE id = %s",
-                        (photo_id,),
-                    )
-                    row = cur.fetchone()
+            with pool.connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT content_type FROM photos WHERE id = %s",
+                    (photo_id,),
+                )
+                row = cur.fetchone()
             if row is None:
                 raise HTTPException(status_code=404, detail="photo not found")
             content_type = row[0]
             try:
                 obj = minio_client.get_object(bucket_name, photo_id)
             except S3Error as e:
-                raise HTTPException(
-                    status_code=500, detail=f"object-store error: {e.code}"
-                ) from e
+                raise HTTPException(status_code=500, detail=f"object-store error: {e.code}") from e
             try:
                 data = obj.read()
             finally:

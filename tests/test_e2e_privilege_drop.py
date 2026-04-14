@@ -20,6 +20,7 @@ photoshare.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -30,8 +31,8 @@ from pathlib import Path
 import pytest
 
 from platform_api import BlockType, Client, PrivilegeDroppedError
-from platformd.engine import PulumiDockerEngine
 from platformd.config import load_daemon_config
+from platformd.engine import PulumiDockerEngine
 from platformd.identities import Identities
 from platformd.scope_store import ScopeStore
 from platformd.server import Server
@@ -42,9 +43,7 @@ SERVICE_ID = "e2edrop"
 def _docker_available() -> bool:
     if shutil.which("docker") is None:
         return False
-    result = subprocess.run(
-        ["docker", "info"], capture_output=True, text=True
-    )
+    result = subprocess.run(["docker", "info"], capture_output=True, text=True)
     return result.returncode == 0
 
 
@@ -86,9 +85,7 @@ def real_daemon(tmp_path: Path):
     engines: dict[str, PulumiDockerEngine] = {}
 
     def factory(service_id: str) -> PulumiDockerEngine:
-        engines.setdefault(
-            service_id, PulumiDockerEngine(service_id=service_id)
-        )
+        engines.setdefault(service_id, PulumiDockerEngine(service_id=service_id))
         return engines[service_id]
 
     server = Server(
@@ -108,10 +105,8 @@ def real_daemon(tmp_path: Path):
         # Tear down any Pulumi stack the test provisioned so the
         # containers do not survive the test run.
         for eng in engines.values():
-            try:
+            with contextlib.suppress(Exception):
                 eng.destroy()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 def test_privilege_drop_blocks_acquire_end_to_end(real_daemon) -> None:
@@ -126,9 +121,7 @@ def test_privilege_drop_blocks_acquire_end_to_end(real_daemon) -> None:
         # cached), starts a container, and the engine's readiness poll
         # waits for SELECT 1 to succeed. The daemon returns the
         # credentials only once the wire protocol responds.
-        db = client.acquire(
-            BlockType.TRANSACTIONAL_STORE, name="db", database="e2e"
-        )
+        db = client.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="e2e")
         assert db.host == "127.0.0.1"
         assert db.database == "e2e"
         assert db.block_type is BlockType.TRANSACTIONAL_STORE

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from platformd.engine_protocol import Engine
 from platform_api.errors import (
     InvalidStateError,
     PrivilegeDroppedError,
@@ -18,6 +17,7 @@ from platform_api.types import (
     PrivilegeState,
     ServiceScope,
 )
+from platformd.engine_protocol import Engine
 
 log = logging.getLogger("platformd.session")
 
@@ -166,9 +166,7 @@ class EnforcingSession(Session):
 class RecordingSession(Session):
     """Records acquire() calls and writes a .recorded.toml on drop/shutdown."""
 
-    def __init__(
-        self, service_id: str, engine: Engine, recording_output: Path
-    ) -> None:
+    def __init__(self, service_id: str, engine: Engine, recording_output: Path) -> None:
         super().__init__(service_id, engine)
         self._recording_output = recording_output
         self._recorded_order: list[str] = []
@@ -211,10 +209,8 @@ class RecordingSession(Session):
             self._recording_written = True
             return
 
-        ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        block_types_seen = sorted(
-            {self._leases[n].block_type.value for n in self._recorded_order}
-        )
+        ts = datetime.now(UTC).isoformat(timespec="seconds")
+        block_types_seen = sorted({self._leases[n].block_type.value for n in self._recorded_order})
         allowed_list = ", ".join(f'"{b}"' for b in block_types_seen)
         body = (
             f"# recorded by platformd at {ts}\n"

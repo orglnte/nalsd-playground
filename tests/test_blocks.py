@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from platformd.blocks import DEFAULT_HOST_PORTS, backend_for
 from platform_api.types import BlockSpec, BlockType
+from platformd.blocks import DEFAULT_HOST_PORTS, backend_for
 
 
 def _spec(
@@ -13,9 +13,7 @@ def _spec(
     profile: str = "minimal",
     **params,
 ) -> BlockSpec:
-    return BlockSpec(
-        name=name, block_type=block_type, profile=profile, params=params
-    )
+    return BlockSpec(name=name, block_type=block_type, profile=profile, params=params)
 
 
 def test_transactional_store_minimal_profile():
@@ -71,9 +69,7 @@ def test_transactional_store_custom_credentials():
 
 def test_unsupported_profile_raises():
     with pytest.raises(ValueError, match="unsupported profile"):
-        backend_for(
-            _spec(BlockType.TRANSACTIONAL_STORE, profile="production")
-        )
+        backend_for(_spec(BlockType.TRANSACTIONAL_STORE, profile="production"))
 
 
 PER_BLOCK_MINIMAL_CEILING_MB = 256

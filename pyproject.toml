@@ -18,6 +18,8 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "httpx>=0.27",
+    "ruff>=0.6",
+    "mypy>=1.10",
 ]
 
 [build-system]
@@ -29,3 +31,44 @@ packages = ["platform_api", "platformd", "photoshare"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [".pulumi", ".pulumi_state", "tmp"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "RUF", # ruff-specific
+    "SIM", # flake8-simplify
+    "PT",  # flake8-pytest-style
+]
+ignore = [
+    "E501",  # line too long — formatter handles
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = ["\\.pulumi/", "\\.pulumi_state/", "tmp/", "build/"]
+
+[[tool.mypy.overrides]]
+module = [
+    "pulumi.*",
+    "pulumi_docker.*",
+    "minio.*",
+    "psycopg_pool.*",
+]
+ignore_missing_imports = true

@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from platformd.scope_loader import load_scope
 from platform_api.types import ServiceScope
+from platformd.scope_loader import load_scope
 
 
 class ScopeNotFoundError(Exception):

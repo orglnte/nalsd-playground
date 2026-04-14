@@ -32,9 +32,7 @@ def load_scope(path: Path) -> ServiceScope:
 
     missing = {"service_id", "allowed_blocks"} - data.keys()
     if missing:
-        raise ValueError(
-            f"scope file {path} missing required keys: {sorted(missing)}"
-        )
+        raise ValueError(f"scope file {path} missing required keys: {sorted(missing)}")
 
     try:
         allowed = {BlockType(b) for b in data["allowed_blocks"]}

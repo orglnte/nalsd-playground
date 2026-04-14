@@ -4,10 +4,10 @@ import json
 import logging
 import os
 import socket
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from platformd.engine_protocol import Engine
 from platform_api.errors import PlatformError
 from platform_api.protocol import (
     encode_credentials,
@@ -17,6 +17,7 @@ from platform_api.protocol import (
 from platform_api.types import BlockType
 from platformd.auth import peer_uid
 from platformd.config import DaemonConfig
+from platformd.engine_protocol import Engine
 from platformd.identities import Identities, UnknownPeerError
 from platformd.scope_store import ScopeNotFoundError, ScopeStore
 from platformd.session import EnforcingSession, RecordingSession, Session
@@ -103,11 +104,11 @@ class Server:
         engine = self._engine_for(service_id)
         try:
             if mode == "record":
-                recording_output = (
-                    self._config.scope_dir / f"{service_id}.recorded.toml"
-                )
+                recording_output = self._config.scope_dir / f"{service_id}.recorded.toml"
                 session: Session = RecordingSession(
-                    service_id, engine, recording_output,
+                    service_id,
+                    engine,
+                    recording_output,
                 )
             else:
                 scope = self._scope_store.get(service_id)
@@ -116,9 +117,7 @@ class Server:
             log.warning("rejecting connection: %s", e)
             _write(conn, error_response(None, e))
             return
-        log.info(
-            "session start: service=%s uid=%d mode=%s", service_id, uid, mode
-        )
+        log.info("session start: service=%s uid=%d mode=%s", service_id, uid, mode)
 
         f = conn.makefile("rwb", buffering=0)
         try:
@@ -147,30 +146,24 @@ class Server:
             return error_response(request_id, e)
         except ValueError as e:
             return error_response(request_id, e)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.exception("unhandled error in %s", method)
             return error_response(request_id, e)
         return result_response(request_id, result)
 
-    def _run_method(
-        self, session: Session, method: str, params: dict[str, Any]
-    ) -> Any:
+    def _run_method(self, session: Session, method: str, params: dict[str, Any]) -> Any:
         if method == "Acquire":
             block_type = BlockType(params["block_type"])
             name = params["name"]
             profile = params.get("profile", "minimal")
             extra = params.get("params") or {}
-            creds = session.acquire(
-                block_type, name=name, profile=profile, **extra
-            )
+            creds = session.acquire(block_type, name=name, profile=profile, **extra)
             return encode_credentials(creds)
         if method == "DropToScalingOnly":
             session.drop_to_scaling_only()
             return None
         if method == "ScaleHint":
-            session.scale_hint(
-                params["name"], load_factor=float(params["load_factor"])
-            )
+            session.scale_hint(params["name"], load_factor=float(params["load_factor"]))
             return None
         if method == "Shutdown":
             session.shutdown()

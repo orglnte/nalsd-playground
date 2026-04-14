@@ -19,8 +19,7 @@ import logging
 import os
 from pathlib import Path
 
-from platform_api import BlockType, Credentials, apply_manifesto
-from platform_api import Client
+from platform_api import BlockType, Client, Credentials, apply_manifesto
 
 log = logging.getLogger("photoshare.bootstrap")
 
@@ -67,9 +66,7 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     # service and platformd provisions a new MinIO container mid-lifecycle;
     # main.py then sees `store is not None` and registers the upload
     # endpoints that were absent in v1.
-    store: Credentials | None = platform.acquire(
-        BlockType.OBJECT_STORE, name="photos"
-    )
+    store: Credentials | None = platform.acquire(BlockType.OBJECT_STORE, name="photos")
     log.info(
         "bootstrap: object-store 'photos' acquired at %s:%d",
         store.host,

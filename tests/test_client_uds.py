@@ -33,9 +33,7 @@ class FakeEngine:
         if self.provisioned is None:
             self.provisioned = []
 
-    def provision(
-        self, spec: BlockSpec, *, existing_leases: dict[str, BlockSpec]
-    ) -> Credentials:
+    def provision(self, spec: BlockSpec, *, existing_leases: dict[str, BlockSpec]) -> Credentials:
         self.provisioned.append(spec)
         return Credentials(
             block_type=spec.block_type,
@@ -64,9 +62,7 @@ def daemon(tmp_path: Path):
     )
     cfg_path = tmp_path / "platformd.toml"
     cfg_path.write_text(
-        f'socket_path = "{short_sock}"\n'
-        'scope_dir = "scopes"\n'
-        'identities_path = "identities.toml"\n'
+        f'socket_path = "{short_sock}"\nscope_dir = "scopes"\nidentities_path = "identities.toml"\n'
     )
     (tmp_path / "identities.toml").write_text(
         f'[[identities]]\nuid = {os.getuid()}\nservice_id = "demo"\n'
@@ -100,9 +96,7 @@ def daemon(tmp_path: Path):
 def test_client_acquire_round_trip(daemon) -> None:
     sock_path, engines = daemon
     with Client("demo", socket_path=sock_path) as client:
-        creds = client.acquire(
-            BlockType.TRANSACTIONAL_STORE, name="photos", database="photos"
-        )
+        creds = client.acquire(BlockType.TRANSACTIONAL_STORE, name="photos", database="photos")
     assert creds.block_type is BlockType.TRANSACTIONAL_STORE
     assert creds.name == "photos"
     assert engines["demo"].provisioned[0].name == "photos"
@@ -111,9 +105,8 @@ def test_client_acquire_round_trip(daemon) -> None:
 
 def test_client_decodes_unknown_block_error(daemon) -> None:
     sock_path, _ = daemon
-    with Client("demo", socket_path=sock_path) as client:
-        with pytest.raises(UnknownBlockError):
-            client.acquire(BlockType.EPHEMERAL_KV_CACHE, name="cache")
+    with Client("demo", socket_path=sock_path) as client, pytest.raises(UnknownBlockError):
+        client.acquire(BlockType.EPHEMERAL_KV_CACHE, name="cache")
 
 
 def test_daemon_rejects_acquire_after_drop(daemon) -> None:

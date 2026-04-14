@@ -40,7 +40,6 @@ from platform_api.types import (
 )
 
 __all__ = [
-    "apply_manifesto",
     "BlockSpec",
     "BlockType",
     "Client",
@@ -54,4 +53,5 @@ __all__ = [
     "ReadinessTimeoutError",
     "ServiceScope",
     "UnknownBlockError",
+    "apply_manifesto",
 ]

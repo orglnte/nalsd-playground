@@ -26,9 +26,7 @@ def load_daemon_config(path: Path) -> DaemonConfig:
 
     missing = {"socket_path", "scope_dir", "identities_path"} - data.keys()
     if missing:
-        raise ValueError(
-            f"daemon config {path} missing required keys: {sorted(missing)}"
-        )
+        raise ValueError(f"daemon config {path} missing required keys: {sorted(missing)}")
 
     base = path.parent
     modes: dict[str, str] = {}

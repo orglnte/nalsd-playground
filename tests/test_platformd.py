@@ -3,16 +3,14 @@ from __future__ import annotations
 import json
 import os
 import socket
-import tempfile
 import threading
+import tomllib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
-
-import tomllib
 
 from platform_api import (
     BlockSpec,
@@ -23,12 +21,12 @@ from platform_api import (
     ServiceScope,
     UnknownBlockError,
 )
-from platformd.scope_loader import load_scope
 from platformd.config import load_daemon_config
 from platformd.identities import Identities, UnknownPeerError, load_identities
+from platformd.scope_loader import load_scope
 from platformd.scope_store import ScopeNotFoundError, ScopeStore
 from platformd.server import Server
-from platformd.session import RECORD_MAX_BLOCKS, EnforcingSession, RecordingSession, Session
+from platformd.session import RECORD_MAX_BLOCKS, EnforcingSession, RecordingSession
 
 
 @dataclass
@@ -39,9 +37,7 @@ class FakeEngine:
         if self.provisioned is None:
             self.provisioned = []
 
-    def provision(
-        self, spec: BlockSpec, *, existing_leases: dict[str, BlockSpec]
-    ) -> Credentials:
+    def provision(self, spec: BlockSpec, *, existing_leases: dict[str, BlockSpec]) -> Credentials:
         self.provisioned.append(spec)
         return Credentials(
             block_type=spec.block_type,
@@ -58,6 +54,7 @@ class FakeEngine:
 
 
 # --- identities ---
+
 
 def _write(tmp_path: Path, name: str, body: str) -> Path:
     p = tmp_path / name
@@ -130,9 +127,7 @@ def test_identities_rejects_empty(tmp_path: Path) -> None:
         "photoshare.recorded",  # collision with the record-mode suffix
     ],
 )
-def test_identities_rejects_unsafe_service_id(
-    tmp_path: Path, bad_service_id: str
-) -> None:
+def test_identities_rejects_unsafe_service_id(tmp_path: Path, bad_service_id: str) -> None:
     """service_id is composed into filesystem paths by ScopeStore and the
     recording-output path. Unsafe values must be rejected at load time
     so no downstream code has to re-validate."""
@@ -147,12 +142,12 @@ def test_identities_rejects_unsafe_service_id(
 
 # --- scope store ---
 
+
 def test_scope_store_loads_by_service_id(tmp_path: Path) -> None:
     scope_dir = tmp_path / "scopes"
     scope_dir.mkdir()
     (scope_dir / "photoshare.toml").write_text(
-        'service_id = "photoshare"\n'
-        'allowed_blocks = ["transactional-store"]\n'
+        'service_id = "photoshare"\nallowed_blocks = ["transactional-store"]\n'
     )
     store = ScopeStore(scope_dir=scope_dir)
     scope = store.get("photoshare")
@@ -170,8 +165,7 @@ def test_scope_store_rejects_service_id_mismatch(tmp_path: Path) -> None:
     deployment error — the store rejects it rather than silently trusting
     the filename OR the file's content."""
     (tmp_path / "photoshare.toml").write_text(
-        'service_id = "other"\n'
-        'allowed_blocks = ["transactional-store"]\n'
+        'service_id = "other"\nallowed_blocks = ["transactional-store"]\n'
     )
     store = ScopeStore(scope_dir=tmp_path)
     with pytest.raises(ValueError, match="expected 'photoshare'"):
@@ -179,6 +173,7 @@ def test_scope_store_rejects_service_id_mismatch(tmp_path: Path) -> None:
 
 
 # --- daemon config ---
+
 
 def test_daemon_config_defaults_to_enforce(tmp_path: Path) -> None:
     cfg_path = tmp_path / "platformd.toml"
@@ -198,7 +193,7 @@ def test_daemon_config_parses_service_modes(tmp_path: Path) -> None:
         'socket_path = "x.sock"\n'
         'scope_dir = "s"\n'
         'identities_path = "i.toml"\n'
-        "\n[service.photoshare]\nmode = \"record\"\n"
+        '\n[service.photoshare]\nmode = "record"\n'
     )
     config = load_daemon_config(cfg_path)
     assert config.mode_for("photoshare") == "record"
@@ -211,13 +206,14 @@ def test_daemon_config_rejects_invalid_mode(tmp_path: Path) -> None:
         'socket_path = "x.sock"\n'
         'scope_dir = "s"\n'
         'identities_path = "i.toml"\n'
-        "\n[service.photoshare]\nmode = \"audit\"\n"
+        '\n[service.photoshare]\nmode = "audit"\n'
     )
     with pytest.raises(ValueError, match="invalid mode"):
         load_daemon_config(cfg_path)
 
 
 # --- session ---
+
 
 def _scope(**overrides: Any) -> ServiceScope:
     defaults: dict[str, Any] = {
@@ -254,6 +250,7 @@ def test_session_drop_blocks_subsequent_acquire() -> None:
 
 
 # --- record mode ---
+
 
 def test_session_subclass_constructors_enforce_invariants() -> None:
     """EnforcingSession requires a scope; RecordingSession requires an output
@@ -345,8 +342,7 @@ def test_recorded_file_does_not_auto_load_as_scope(tmp_path: Path) -> None:
     scope_dir = tmp_path / "scopes"
     scope_dir.mkdir()
     (scope_dir / "photoshare.recorded.toml").write_text(
-        'service_id = "photoshare"\n'
-        'allowed_blocks = ["transactional-store"]\n'
+        'service_id = "photoshare"\nallowed_blocks = ["transactional-store"]\n'
     )
     store = ScopeStore(scope_dir=scope_dir)
     with pytest.raises(ScopeNotFoundError):
@@ -354,6 +350,7 @@ def test_recorded_file_does_not_auto_load_as_scope(tmp_path: Path) -> None:
 
 
 # --- server end-to-end over a real UDS, with a fake engine ---
+
 
 class _ClientConn:
     def __init__(self, sock_path: Path) -> None:
@@ -388,9 +385,7 @@ def running_server(tmp_path: Path):
     )
     cfg_path = tmp_path / "platformd.toml"
     cfg_path.write_text(
-        f'socket_path = "{short_sock}"\n'
-        f'scope_dir = "scopes"\n'
-        f'identities_path = "identities.toml"\n'
+        f'socket_path = "{short_sock}"\nscope_dir = "scopes"\nidentities_path = "identities.toml"\n'
     )
     (tmp_path / "identities.toml").write_text(
         f'[[identities]]\nuid = {os.getuid()}\nservice_id = "demo"\n'
@@ -467,9 +462,7 @@ def test_server_privilege_drop_is_per_connection(running_server) -> None:
     try:
         conn.call("Acquire", {"block_type": "transactional-store", "name": "db"})
         conn.call("DropToScalingOnly")
-        rejected = conn.call(
-            "Acquire", {"block_type": "object-store", "name": "images"}
-        )
+        rejected = conn.call("Acquire", {"block_type": "object-store", "name": "images"})
         assert rejected["error"]["code"] == "privilege_dropped"
     finally:
         conn.close()
@@ -477,9 +470,7 @@ def test_server_privilege_drop_is_per_connection(running_server) -> None:
     # Reconnect — privilege state should reset.
     conn2 = _ClientConn(sock_path)
     try:
-        resp = conn2.call(
-            "Acquire", {"block_type": "object-store", "name": "images"}
-        )
+        resp = conn2.call("Acquire", {"block_type": "object-store", "name": "images"})
     finally:
         conn2.close()
     assert "error" not in resp, resp
@@ -500,7 +491,7 @@ def recording_server(tmp_path: Path):
         f'socket_path = "{short_sock}"\n'
         f'scope_dir = "scopes"\n'
         f'identities_path = "identities.toml"\n'
-        "\n[service.demo]\nmode = \"record\"\n"
+        '\n[service.demo]\nmode = "record"\n'
     )
     (tmp_path / "identities.toml").write_text(
         f'[[identities]]\nuid = {os.getuid()}\nservice_id = "demo"\n'
@@ -535,7 +526,7 @@ def test_server_record_mode_end_to_end(recording_server) -> None:
     """Full loop: mode=record, no scope file, service connects, acquires
     blocks that would normally require a scope, drops — daemon writes
     demo.recorded.toml next to where the enforced scope would live."""
-    sock_path, scope_dir, engines = recording_server
+    sock_path, scope_dir, _engines = recording_server
     conn = _ClientConn(sock_path)
     try:
         r1 = conn.call(
@@ -673,9 +664,7 @@ def test_full_record_then_enforce_flow(tmp_path: Path) -> None:
     assert promoted.is_file()
 
     # --- Phase 2: enforce (new daemon, same scope dir) ---
-    server2, sock_path2, _, _, thread2 = _run_server(
-        tmp_path, record_for=set(), scope_files={}
-    )
+    server2, sock_path2, _, _, thread2 = _run_server(tmp_path, record_for=set(), scope_files={})
     try:
         conn = _ClientConn(sock_path2)
         try:

@@ -14,7 +14,6 @@ import os
 import socket
 import time
 from pathlib import Path
-from typing import Any
 
 from platform_api.errors import ProvisioningError, ReadinessTimeoutError
 from platform_api.types import BlockSpec, BlockType, Credentials
@@ -209,10 +208,9 @@ class PulumiDockerEngine:
             f"postgresql://{backend.username}:{backend.password}"
             f"@{self._host}:{backend.host_port}/{backend.database}"
         )
-        with psycopg.connect(dsn, connect_timeout=2) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
+        with psycopg.connect(dsn, connect_timeout=2) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
         return True
 
     def _check_redis(self, backend: BackendConfig) -> bool:
@@ -237,9 +235,7 @@ class PulumiDockerEngine:
         # the server is ready to handle S3 requests.
         return self._tcp_open(backend.host_port)
 
-    def _build_credentials(
-        self, spec: BlockSpec, backend: BackendConfig
-    ) -> Credentials:
+    def _build_credentials(self, spec: BlockSpec, backend: BackendConfig) -> Credentials:
         extras = dict(backend.extras)
         if spec.block_type is BlockType.OBJECT_STORE:
             extras.setdefault("bucket", spec.name)
