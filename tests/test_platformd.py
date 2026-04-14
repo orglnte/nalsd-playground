@@ -687,3 +687,74 @@ def test_full_record_then_enforce_flow(tmp_path: Path) -> None:
     finally:
         server2.stop()
         thread2.join(timeout=2)
+
+
+# --- destroy CLI ---
+
+
+def test_destroy_cli_requires_matching_confirmation(monkeypatch, capsys):
+    """Interactive destroy aborts when the typed confirmation differs from
+    the service_id. Guards against fat-finger destruction of the wrong
+    stack — operator must type the exact name."""
+    from platformd.__main__ import main
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "wrong-name")
+    rc = main(["destroy", "--service-id", "photoshare"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "Cancelled" in out
+
+
+def test_destroy_cli_requires_matching_confirmation_eof(monkeypatch, capsys):
+    """If stdin is closed (e.g. piped from a script with no confirmation),
+    destroy aborts rather than proceeding on empty input."""
+    from platformd.__main__ import main
+
+    def _eof(_prompt):
+        raise EOFError()
+
+    monkeypatch.setattr("builtins.input", _eof)
+    rc = main(["destroy", "--service-id", "photoshare"])
+    assert rc == 1
+    assert "Cancelled" in capsys.readouterr().out
+
+
+def test_destroy_cli_yes_flag_skips_confirmation(monkeypatch):
+    """--yes bypasses the interactive prompt for automation. The engine
+    itself is a no-op here (no such stack exists), so the exit code comes
+    from the clean destroy-on-nonexistent-stack path."""
+    from platformd.__main__ import main
+
+    calls: list[str] = []
+
+    class _FakeEngine:
+        def __init__(self, service_id: str, **_kw) -> None:
+            calls.append(service_id)
+
+        def destroy(self) -> None:
+            calls.append("destroyed")
+
+    monkeypatch.setattr("platformd.engine.PulumiDockerEngine", _FakeEngine)
+    rc = main(["destroy", "--service-id", "ghost-service", "--yes"])
+    assert rc == 0
+    assert calls == ["ghost-service", "destroyed"]
+
+
+def test_destroy_cli_proceeds_on_correct_confirmation(monkeypatch):
+    """Typing the exact service_id at the prompt proceeds with destroy."""
+    from platformd.__main__ import main
+
+    calls: list[str] = []
+
+    class _FakeEngine:
+        def __init__(self, service_id: str, **_kw) -> None:
+            calls.append(service_id)
+
+        def destroy(self) -> None:
+            calls.append("destroyed")
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "photoshare")
+    monkeypatch.setattr("platformd.engine.PulumiDockerEngine", _FakeEngine)
+    rc = main(["destroy", "--service-id", "photoshare"])
+    assert rc == 0
+    assert calls == ["photoshare", "destroyed"]
