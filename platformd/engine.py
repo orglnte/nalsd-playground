@@ -236,9 +236,15 @@ class PulumiDockerEngine:
         return self._tcp_open(backend.host_port)
 
     def _build_credentials(self, spec: BlockSpec, backend: BackendConfig) -> Credentials:
-        extras = dict(backend.extras)
+        extras: dict[str, object] = dict(backend.extras)
         if spec.block_type is BlockType.OBJECT_STORE:
             extras.setdefault("bucket", spec.name)
+        # Surface capacity hints so the service can size its own clients
+        # (pools, connection limits) to match the provisioned
+        # infrastructure. Keys are block-specific; see blocks.py renderers.
+        extras.update(backend.capacity_hints)
+        extras["memory_mb"] = backend.memory_mb
+        extras["storage_mb"] = backend.storage_mb
         return Credentials(
             block_type=spec.block_type,
             name=spec.name,

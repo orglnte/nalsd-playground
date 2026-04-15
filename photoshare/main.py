@@ -26,11 +26,36 @@ from platform_api import Client, Credentials
 log = logging.getLogger("photoshare.main")
 
 
+# Reserve a small headroom below postgres max_connections for admin /
+# health-check traffic so the app pool cannot starve operator access.
+_CONNECTION_HEADROOM = 2
+
+
+def plan_pool(creds: Credentials) -> tuple[int, int]:
+    """Derive (min_size, max_size) for a psycopg pool from platform hints.
+
+    Reads `max_connections` from Credentials.extras and reserves a small
+    headroom for admin/health traffic. Single-worker sizing today; a
+    multi-worker deployment would divide the result by worker count.
+    """
+    max_connections = int(creds.extras.get("max_connections", 20))
+    pool_max = max(1, max_connections - _CONNECTION_HEADROOM)
+    pool_min = min(2, pool_max)
+    return pool_min, pool_max
+
+
 def _make_pool(creds: Credentials) -> ConnectionPool:
+    pool_min, pool_max = plan_pool(creds)
+    log.info(
+        "pool sizing: max_connections=%s pool_min=%d pool_max=%d",
+        creds.extras.get("max_connections", "<default>"),
+        pool_min,
+        pool_max,
+    )
     return ConnectionPool(
         creds.as_dsn(),
-        min_size=2,
-        max_size=10,
+        min_size=pool_min,
+        max_size=pool_max,
         kwargs={"connect_timeout": 5},
     )
 
