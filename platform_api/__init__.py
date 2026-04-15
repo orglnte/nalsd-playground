@@ -34,17 +34,22 @@ from platform_api.manifesto import apply_manifesto
 from platform_api.types import (
     BlockSpec,
     BlockType,
+    ComputeSpec,
     Credentials,
+    Persistence,
     PrivilegeState,
     ServiceScope,
+    StorageSpec,
 )
 
 __all__ = [
     "BlockSpec",
     "BlockType",
     "Client",
+    "ComputeSpec",
     "Credentials",
     "InvalidStateError",
+    "Persistence",
     "PlatformError",
     "PrivilegeDroppedError",
     "PrivilegeState",
@@ -52,6 +57,7 @@ __all__ = [
     "QuotaExceededError",
     "ReadinessTimeoutError",
     "ServiceScope",
+    "StorageSpec",
     "UnknownBlockError",
     "apply_manifesto",
 ]

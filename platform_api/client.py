@@ -24,8 +24,15 @@ import socket
 from pathlib import Path
 from typing import Any
 
-from platform_api.protocol import decode_credentials, exception_for
-from platform_api.types import BlockType, Credentials
+from platform_api.protocol import decode_credentials, encode_block_spec, exception_for
+from platform_api.types import (
+    BlockSpec,
+    BlockType,
+    ComputeSpec,
+    Credentials,
+    Persistence,
+    StorageSpec,
+)
 
 log = logging.getLogger("platform_api.client")
 
@@ -82,19 +89,40 @@ class Client:
         block_type: str | BlockType,
         *,
         name: str,
-        profile: str = "minimal",
+        memory_mb: int | None = None,
+        storage_mb: int | None = None,
+        rps: int | None = None,
+        persistent: bool = False,
+        ram_backed: bool = False,
         **params: Any,
     ) -> Credentials:
-        bt_value = block_type.value if isinstance(block_type, BlockType) else block_type
-        result = self._call(
-            "Acquire",
-            {
-                "block_type": bt_value,
-                "name": name,
-                "profile": profile,
-                "params": params,
-            },
+        bt = BlockType(block_type) if isinstance(block_type, str) else block_type
+        compute = ComputeSpec(memory_mb=memory_mb) if memory_mb is not None else None
+
+        if persistent and ram_backed:
+            raise ValueError("persistent=True and ram_backed=True are mutually exclusive")
+        if ram_backed:
+            persistence = Persistence.TMPFS
+        elif persistent:
+            persistence = Persistence.PERSISTENT
+        else:
+            persistence = Persistence.EPHEMERAL
+
+        storage: StorageSpec | None
+        if storage_mb is not None or persistent or ram_backed:
+            storage = StorageSpec(size_mb=storage_mb, persistence=persistence)
+        else:
+            storage = None
+
+        spec = BlockSpec(
+            name=name,
+            block_type=bt,
+            compute=compute,
+            storage=storage,
+            rps=rps,
+            params=params,
         )
+        result = self._call("Acquire", encode_block_spec(spec))
         return decode_credentials(result)
 
     def drop_to_scaling_only(self) -> None:

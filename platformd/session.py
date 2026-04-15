@@ -13,9 +13,11 @@ from platform_api.errors import (
 from platform_api.types import (
     BlockSpec,
     BlockType,
+    ComputeSpec,
     Credentials,
     PrivilegeState,
     ServiceScope,
+    StorageSpec,
 )
 from platformd.engine_protocol import Engine
 
@@ -53,7 +55,9 @@ class Session:
         block_type: str | BlockType,
         *,
         name: str,
-        profile: str = "minimal",
+        compute: ComputeSpec | None = None,
+        storage: StorageSpec | None = None,
+        rps: int | None = None,
         **params: Any,
     ) -> Credentials:
         if self._state is not PrivilegeState.ACQUIRING:
@@ -75,13 +79,22 @@ class Session:
             log.info("acquire: reusing lease %s (%s)", name, bt.value)
             return self._credentials[name]
 
-        spec = BlockSpec(name=name, block_type=bt, profile=profile, params=params)
+        spec = BlockSpec(
+            name=name,
+            block_type=bt,
+            compute=compute,
+            storage=storage,
+            rps=rps,
+            params=params,
+        )
         log.info(
-            "acquire: service=%s block=%s name=%s profile=%s",
+            "acquire: service=%s block=%s name=%s compute=%s storage=%s rps=%s",
             self.service_id,
             bt.value,
             name,
-            profile,
+            compute,
+            storage,
+            rps,
         )
         prospective = {**self._leases, name: spec}
         credentials = self._engine.provision(spec, existing_leases=prospective)

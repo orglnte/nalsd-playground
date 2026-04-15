@@ -7,9 +7,10 @@ table — adding a new error class is a one-file edit, and neither the
 daemon nor the client can drift out of sync with the other because
 there is no second mapping to maintain.
 
-`encode_credentials` / `decode_credentials` are the only other pieces
-that are wire-shaped: they turn a Credentials dataclass into the dict
-the daemon emits and the client consumes.
+`encode_credentials` / `decode_credentials` and `encode_block_spec` /
+`decode_block_spec` are the other wire-shaped helpers: they turn the
+relevant dataclasses into the dicts the daemon emits and the client
+consumes (and vice versa).
 """
 
 from __future__ import annotations
@@ -26,7 +27,14 @@ from platform_api.errors import (
     ReadinessTimeoutError,
     UnknownBlockError,
 )
-from platform_api.types import BlockType, Credentials
+from platform_api.types import (
+    BlockSpec,
+    BlockType,
+    ComputeSpec,
+    Credentials,
+    Persistence,
+    StorageSpec,
+)
 
 # Single authoritative exception ↔ wire-code mapping.
 _ERROR_TABLE: tuple[tuple[type[PlatformError], str], ...] = (
@@ -82,6 +90,51 @@ def decode_credentials(d: dict[str, Any]) -> Credentials:
         password=d.get("password"),
         database=d.get("database"),
         extras=d.get("extras") or {},
+    )
+
+
+def encode_block_spec(spec: BlockSpec) -> dict[str, Any]:
+    """Serialize a BlockSpec for the Acquire RPC payload."""
+    payload: dict[str, Any] = {
+        "name": spec.name,
+        "block_type": spec.block_type.value,
+        "params": dict(spec.params),
+    }
+    if spec.compute is not None:
+        payload["compute"] = {"memory_mb": spec.compute.memory_mb}
+    if spec.storage is not None:
+        storage_payload: dict[str, Any] = {
+            "persistence": spec.storage.persistence.value,
+        }
+        if spec.storage.size_mb is not None:
+            storage_payload["size_mb"] = spec.storage.size_mb
+        payload["storage"] = storage_payload
+    if spec.rps is not None:
+        payload["rps"] = spec.rps
+    return payload
+
+
+def decode_block_spec(d: dict[str, Any]) -> BlockSpec:
+    """Reconstruct a BlockSpec from an Acquire RPC payload."""
+    compute_d = d.get("compute")
+    storage_d = d.get("storage")
+    compute = ComputeSpec(memory_mb=int(compute_d["memory_mb"])) if compute_d else None
+    storage: StorageSpec | None
+    if storage_d:
+        size_mb = storage_d.get("size_mb")
+        storage = StorageSpec(
+            size_mb=int(size_mb) if size_mb is not None else None,
+            persistence=Persistence(storage_d.get("persistence", Persistence.EPHEMERAL.value)),
+        )
+    else:
+        storage = None
+    return BlockSpec(
+        name=d["name"],
+        block_type=BlockType(d["block_type"]),
+        compute=compute,
+        storage=storage,
+        rps=int(d["rps"]) if d.get("rps") is not None else None,
+        params=dict(d.get("params") or {}),
     )
 
 

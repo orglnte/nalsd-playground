@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -13,6 +15,31 @@ class PrivilegeState(StrEnum):
     ACQUIRING = "acquiring"
     OPERATIONAL = "operational"
     SHUTDOWN = "shutdown"
+
+
+class Persistence(StrEnum):
+    EPHEMERAL = "ephemeral"
+    PERSISTENT = "persistent"
+    TMPFS = "tmpfs"
+
+
+@dataclass(frozen=True)
+class ComputeSpec:
+    memory_mb: int
+
+    def __post_init__(self) -> None:
+        if self.memory_mb <= 0:
+            raise ValueError(f"ComputeSpec.memory_mb must be positive, got {self.memory_mb}")
+
+
+@dataclass(frozen=True)
+class StorageSpec:
+    size_mb: int | None = None  # None = let the block use its baseline
+    persistence: Persistence = Persistence.EPHEMERAL
+
+    def __post_init__(self) -> None:
+        if self.size_mb is not None and self.size_mb <= 0:
+            raise ValueError(f"StorageSpec.size_mb must be positive, got {self.size_mb}")
 
 
 @dataclass(frozen=True)
@@ -44,8 +71,19 @@ class Credentials:
 class BlockSpec:
     name: str
     block_type: BlockType
-    profile: str
+    compute: ComputeSpec | None = None
+    storage: StorageSpec | None = None
+    rps: int | None = None
     params: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.rps is not None and self.compute is not None:
+            raise ValueError(
+                "BlockSpec: specify either rps or compute, not both "
+                "(rps sizes compute via the block's capacity curve)"
+            )
+        if self.rps is not None and self.rps <= 0:
+            raise ValueError(f"BlockSpec.rps must be positive, got {self.rps}")
 
 
 @dataclass

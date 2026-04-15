@@ -10,11 +10,11 @@ from typing import Any
 
 from platform_api.errors import PlatformError
 from platform_api.protocol import (
+    decode_block_spec,
     encode_credentials,
     error_response,
     result_response,
 )
-from platform_api.types import BlockType
 from platformd.auth import peer_uid
 from platformd.config import DaemonConfig
 from platformd.engine_protocol import Engine
@@ -153,11 +153,15 @@ class Server:
 
     def _run_method(self, session: Session, method: str, params: dict[str, Any]) -> Any:
         if method == "Acquire":
-            block_type = BlockType(params["block_type"])
-            name = params["name"]
-            profile = params.get("profile", "minimal")
-            extra = params.get("params") or {}
-            creds = session.acquire(block_type, name=name, profile=profile, **extra)
+            spec = decode_block_spec(params)
+            creds = session.acquire(
+                spec.block_type,
+                name=spec.name,
+                compute=spec.compute,
+                storage=spec.storage,
+                rps=spec.rps,
+                **spec.params,
+            )
             return encode_credentials(creds)
         if method == "DropToScalingOnly":
             session.drop_to_scaling_only()
