@@ -25,13 +25,12 @@ log = logging.getLogger("photoshare.bootstrap")
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
-_ENV_SOCKET = "PLATFORMD_SOCKET"
-_DEFAULT_SOCKET = Path("dev-config/run/platformd.sock")
+_ENV_BASE_URL = "PLATFORMD_URL"
+_DEFAULT_BASE_URL = "http://127.0.0.1:8443"
 
 
-def _socket_path() -> Path:
-    override = os.environ.get(_ENV_SOCKET)
-    return Path(override) if override else _DEFAULT_SOCKET
+def _base_url() -> str:
+    return os.environ.get(_ENV_BASE_URL, _DEFAULT_BASE_URL)
 
 
 def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
@@ -42,7 +41,7 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     store_credentials is None in v1.
     """
     log.info("photoshare bootstrap: ACQUIRING phase begin")
-    platform = Client("photoshare", socket_path=_socket_path())
+    platform = Client("photoshare", base_url=_base_url())
     platform.connect()
 
     db = platform.acquire(

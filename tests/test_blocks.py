@@ -225,8 +225,8 @@ def test_client_rejects_persistent_and_ram_backed_together():
     from platform_api.client import Client
 
     # Use a non-connected client purely to exercise the kwarg guard; the
-    # ValueError fires before any socket I/O.
-    c = Client("svc", socket_path="/tmp/does-not-exist.sock")
+    # ValueError fires before any HTTP I/O.
+    c = Client("svc", base_url="http://127.0.0.1:1")
     with pytest.raises(ValueError, match="mutually exclusive"):
         c.acquire(
             BlockType.TRANSACTIONAL_STORE,

@@ -1,14 +1,17 @@
-"""Tests for platform_api.Client (UDS client) against a running daemon."""
+"""Tests for platform_api.Client against the FastAPI platformd app.
+
+The Client takes an injected `httpx.Client` so tests can feed in an
+`httpx.Client` backed by `ASGITransport`, which calls the FastAPI app
+in-process — no threads, no sockets. Same client code path as production,
+same HTTP wire shape."""
 
 from __future__ import annotations
 
-import os
-import threading
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from platform_api import (
     BlockSpec,
@@ -20,7 +23,7 @@ from platform_api import (
     UnknownBlockError,
 )
 from platformd.config import load_daemon_config
-from platformd.identities import Identities
+from platformd.identities import load_identities
 from platformd.scope_store import ScopeStore
 from platformd.server import Server
 
@@ -51,8 +54,6 @@ class FakeEngine:
 
 @pytest.fixture
 def daemon(tmp_path: Path):
-    short_sock = Path(f"/tmp/nalsd-ptd-client-{uuid.uuid4().hex[:8]}.sock")
-
     scope_dir = tmp_path / "scopes"
     scope_dir.mkdir()
     (scope_dir / "demo.toml").write_text(
@@ -62,14 +63,16 @@ def daemon(tmp_path: Path):
     )
     cfg_path = tmp_path / "platformd.toml"
     cfg_path.write_text(
-        f'socket_path = "{short_sock}"\nscope_dir = "scopes"\nidentities_path = "identities.toml"\n'
+        'listen_address = "127.0.0.1:0"\n'
+        'scope_dir = "scopes"\n'
+        'identities_path = "identities.toml"\n'
     )
     (tmp_path / "identities.toml").write_text(
-        f'[[identities]]\nuid = {os.getuid()}\nservice_id = "demo"\n'
+        '[[identities]]\nservice_id = "demo"\n'
     )
 
     config = load_daemon_config(cfg_path)
-    identities = Identities(by_uid={os.getuid(): "demo"})
+    identities = load_identities(config.identities_path)
     store = ScopeStore(scope_dir=config.scope_dir)
     engines: dict[str, FakeEngine] = {}
 
@@ -83,19 +86,21 @@ def daemon(tmp_path: Path):
         scope_store=store,
         engine_factory=factory,
     )
-    server.start()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+
+    http = TestClient(server.app)
     try:
-        yield short_sock, engines
+        yield http, engines
     finally:
-        server.stop()
-        thread.join(timeout=2)
+        http.close()
+
+
+def _client(http: TestClient, service_id: str = "demo") -> Client:
+    return Client(service_id, base_url="http://testserver", http_client=http)
 
 
 def test_client_acquire_round_trip(daemon) -> None:
-    sock_path, engines = daemon
-    with Client("demo", socket_path=sock_path) as client:
+    http, engines = daemon
+    with _client(http) as client:
         creds = client.acquire(BlockType.TRANSACTIONAL_STORE, name="photos", database="photos")
     assert creds.block_type is BlockType.TRANSACTIONAL_STORE
     assert creds.name == "photos"
@@ -104,8 +109,8 @@ def test_client_acquire_round_trip(daemon) -> None:
 
 
 def test_client_decodes_unknown_block_error(daemon) -> None:
-    sock_path, _ = daemon
-    with Client("demo", socket_path=sock_path) as client, pytest.raises(UnknownBlockError):
+    http, _ = daemon
+    with _client(http) as client, pytest.raises(UnknownBlockError):
         client.acquire(BlockType.EPHEMERAL_KV_CACHE, name="cache")
 
 
@@ -115,8 +120,8 @@ def test_daemon_rejects_acquire_after_drop(daemon) -> None:
     enforces the drop: acquire → drop → acquire, second call rejected by
     the daemon with PrivilegeDroppedError, and nothing was provisioned
     for it."""
-    sock_path, engines = daemon
-    with Client("demo", socket_path=sock_path) as client:
+    http, engines = daemon
+    with _client(http) as client:
         client.acquire(BlockType.TRANSACTIONAL_STORE, name="db")
         client.drop_to_scaling_only()
         with pytest.raises(PrivilegeDroppedError):
@@ -126,8 +131,8 @@ def test_daemon_rejects_acquire_after_drop(daemon) -> None:
 
 
 def test_client_scale_hint_requires_drop(daemon) -> None:
-    sock_path, _ = daemon
-    with Client("demo", socket_path=sock_path) as client:
+    http, _ = daemon
+    with _client(http) as client:
         client.acquire(BlockType.TRANSACTIONAL_STORE, name="db")
         with pytest.raises(InvalidStateError):
             client.scale_hint("db", load_factor=0.5)
@@ -136,7 +141,32 @@ def test_client_scale_hint_requires_drop(daemon) -> None:
 
 
 def test_client_string_block_type_accepted(daemon) -> None:
-    sock_path, _ = daemon
-    with Client("demo", socket_path=sock_path) as client:
+    http, _ = daemon
+    with _client(http) as client:
         creds = client.acquire("object-store", name="images")
     assert creds.block_type is BlockType.OBJECT_STORE
+
+
+def test_new_session_resets_privilege_state(daemon) -> None:
+    """A service that reconnects (new POST /sessions) starts back in
+    ACQUIRING. Enables the v1 → v1.1 restart-the-service demo."""
+    http, _ = daemon
+    with _client(http) as client:
+        client.acquire(BlockType.TRANSACTIONAL_STORE, name="db")
+        client.drop_to_scaling_only()
+        with pytest.raises(PrivilegeDroppedError):
+            client.acquire(BlockType.OBJECT_STORE, name="images")
+
+    # New client = new session = ACQUIRING again.
+    with _client(http) as client:
+        creds = client.acquire(BlockType.OBJECT_STORE, name="images")
+        assert creds.block_type is BlockType.OBJECT_STORE
+
+
+def test_client_rejects_unknown_service_id_at_connect(daemon) -> None:
+    from platform_api.errors import PlatformError
+
+    http, _ = daemon
+    client = _client(http, service_id="intruder")
+    with pytest.raises(PlatformError, match="intruder"):
+        client.connect()

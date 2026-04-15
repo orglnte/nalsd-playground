@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-import json
-import os
-import socket
-import threading
 import tomllib
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
 from platform_api import (
     BlockSpec,
@@ -21,8 +17,9 @@ from platform_api import (
     ServiceScope,
     UnknownBlockError,
 )
+from platformd.auth import IdentityRejectedError, TrustingVerifier
 from platformd.config import load_daemon_config
-from platformd.identities import Identities, UnknownPeerError, load_identities
+from platformd.identities import load_identities
 from platformd.scope_loader import load_scope
 from platformd.scope_store import ScopeNotFoundError, ScopeStore
 from platformd.server import Server
@@ -68,45 +65,31 @@ def test_identities_load_and_lookup(tmp_path: Path) -> None:
         "identities.toml",
         """
 [[identities]]
-uid = 501
 service_id = "photoshare"
 
 [[identities]]
-uid = 1000
 service_id = "billing"
 """,
     )
     ids = load_identities(p)
-    assert ids.service_for_uid(501) == "photoshare"
-    assert ids.service_for_uid(1000) == "billing"
+    assert ids.is_known("photoshare")
+    assert ids.is_known("billing")
+    assert not ids.is_known("unknown")
 
 
-def test_identities_unknown_uid_raises(tmp_path: Path) -> None:
-    p = _write(
-        tmp_path,
-        "identities.toml",
-        '[[identities]]\nuid = 501\nservice_id = "photoshare"\n',
-    )
-    ids = load_identities(p)
-    with pytest.raises(UnknownPeerError):
-        ids.service_for_uid(99)
-
-
-def test_identities_rejects_duplicate_uid(tmp_path: Path) -> None:
+def test_identities_rejects_duplicate_service_id(tmp_path: Path) -> None:
     p = _write(
         tmp_path,
         "identities.toml",
         """
 [[identities]]
-uid = 501
-service_id = "a"
+service_id = "photoshare"
 
 [[identities]]
-uid = 501
-service_id = "b"
+service_id = "photoshare"
 """,
     )
-    with pytest.raises(ValueError, match="duplicate uid"):
+    with pytest.raises(ValueError, match="duplicate service_id"):
         load_identities(p)
 
 
@@ -134,10 +117,30 @@ def test_identities_rejects_unsafe_service_id(tmp_path: Path, bad_service_id: st
     p = _write(
         tmp_path,
         "identities.toml",
-        f'[[identities]]\nuid = 501\nservice_id = "{bad_service_id}"\n',
+        f'[[identities]]\nservice_id = "{bad_service_id}"\n',
     )
-    with pytest.raises(ValueError, match="not a safe identifier"):
+    with pytest.raises(ValueError, match=r"(not a safe identifier|must be a string)"):
         load_identities(p)
+
+
+# --- TrustingVerifier ---
+
+
+def test_trusting_verifier_accepts_known_service() -> None:
+    v = TrustingVerifier(known_service_ids=frozenset({"photoshare"}))
+    assert v.verify({"service_id": "photoshare"}) == "photoshare"
+
+
+def test_trusting_verifier_rejects_unknown_service() -> None:
+    v = TrustingVerifier(known_service_ids=frozenset({"photoshare"}))
+    with pytest.raises(IdentityRejectedError, match="unknown service_id"):
+        v.verify({"service_id": "intruder"})
+
+
+def test_trusting_verifier_rejects_missing_service_id() -> None:
+    v = TrustingVerifier(known_service_ids=frozenset({"photoshare"}))
+    with pytest.raises(IdentityRejectedError, match="missing or invalid"):
+        v.verify({})
 
 
 # --- scope store ---
@@ -161,9 +164,6 @@ def test_scope_store_missing_file(tmp_path: Path) -> None:
 
 
 def test_scope_store_rejects_service_id_mismatch(tmp_path: Path) -> None:
-    """A scope file on disk declaring a different service_id is a
-    deployment error — the store rejects it rather than silently trusting
-    the filename OR the file's content."""
     (tmp_path / "photoshare.toml").write_text(
         'service_id = "other"\nallowed_blocks = ["transactional-store"]\n'
     )
@@ -178,19 +178,20 @@ def test_scope_store_rejects_service_id_mismatch(tmp_path: Path) -> None:
 def test_daemon_config_defaults_to_enforce(tmp_path: Path) -> None:
     cfg_path = tmp_path / "platformd.toml"
     cfg_path.write_text(
-        'socket_path = "run/platformd.sock"\n'
+        'listen_address = "127.0.0.1:8443"\n'
         'scope_dir = "scopes"\n'
         'identities_path = "identities.toml"\n'
     )
     config = load_daemon_config(cfg_path)
     assert config.mode_for("anything") == "enforce"
-    assert config.socket_path == (tmp_path / "run/platformd.sock").resolve()
+    assert config.listen_host == "127.0.0.1"
+    assert config.listen_port == 8443
 
 
 def test_daemon_config_parses_service_modes(tmp_path: Path) -> None:
     cfg_path = tmp_path / "platformd.toml"
     cfg_path.write_text(
-        'socket_path = "x.sock"\n'
+        'listen_address = "127.0.0.1:9000"\n'
         'scope_dir = "s"\n'
         'identities_path = "i.toml"\n'
         '\n[service.photoshare]\nmode = "record"\n'
@@ -203,12 +204,23 @@ def test_daemon_config_parses_service_modes(tmp_path: Path) -> None:
 def test_daemon_config_rejects_invalid_mode(tmp_path: Path) -> None:
     cfg_path = tmp_path / "platformd.toml"
     cfg_path.write_text(
-        'socket_path = "x.sock"\n'
+        'listen_address = "127.0.0.1:9000"\n'
         'scope_dir = "s"\n'
         'identities_path = "i.toml"\n'
         '\n[service.photoshare]\nmode = "audit"\n'
     )
     with pytest.raises(ValueError, match="invalid mode"):
+        load_daemon_config(cfg_path)
+
+
+def test_daemon_config_rejects_bad_listen_address(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "platformd.toml"
+    cfg_path.write_text(
+        'listen_address = "not-a-host-port"\n'
+        'scope_dir = "s"\n'
+        'identities_path = "i.toml"\n'
+    )
+    with pytest.raises(ValueError, match="listen_address"):
         load_daemon_config(cfg_path)
 
 
@@ -255,10 +267,8 @@ def test_session_drop_blocks_subsequent_acquire() -> None:
 def test_session_subclass_constructors_enforce_invariants() -> None:
     """EnforcingSession requires a scope; RecordingSession requires an output
     path. These are enforced by the constructor signatures — no mode string."""
-    # EnforcingSession without scope → TypeError (positional arg missing)
     with pytest.raises(TypeError):
         EnforcingSession("demo", FakeEngine())  # type: ignore[call-arg]
-    # RecordingSession without output → TypeError
     with pytest.raises(TypeError):
         RecordingSession("demo", FakeEngine())  # type: ignore[call-arg]
 
@@ -267,7 +277,6 @@ def test_session_record_mode_accumulates_and_writes_on_drop(tmp_path: Path) -> N
     out = tmp_path / "demo.recorded.toml"
     engine = FakeEngine()
     session = RecordingSession("demo", engine, out)
-    # No scope required and no BlockType restriction — record captures all.
     session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
     session.acquire(BlockType.OBJECT_STORE, name="images")
     session.acquire(BlockType.EPHEMERAL_KV_CACHE, name="cache")
@@ -283,16 +292,12 @@ def test_session_record_mode_accumulates_and_writes_on_drop(tmp_path: Path) -> N
     }
     assert parsed["max_blocks"] == 3
 
-    # Header comments must be present so the operator knows it's a draft.
     text = out.read_text()
     assert "recorded by platformd" in text
     assert "rename to demo.toml" in text
 
 
 def test_session_record_mode_writes_on_shutdown_without_drop(tmp_path: Path) -> None:
-    """A service that crashes or disconnects without dropping still leaves
-    a usable recording — the operator can see what it asked for before
-    the crash."""
     out = tmp_path / "demo.recorded.toml"
     session = RecordingSession("demo", FakeEngine(), out)
     session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
@@ -304,9 +309,6 @@ def test_session_record_mode_writes_on_shutdown_without_drop(tmp_path: Path) -> 
 
 
 def test_session_record_mode_drop_then_shutdown_writes_once(tmp_path: Path) -> None:
-    """drop_to_scaling_only() writes the recording; a subsequent shutdown()
-    must not write again (the _recording_written guard), so the operator
-    sees exactly one authoritative draft per recording run."""
     out = tmp_path / "demo.recorded.toml"
     session = RecordingSession("demo", FakeEngine(), out)
     session.acquire(BlockType.TRANSACTIONAL_STORE, name="db", database="db")
@@ -325,8 +327,6 @@ def test_session_record_mode_no_acquires_skips_write(tmp_path: Path) -> None:
 
 
 def test_session_record_mode_ceiling_enforced(tmp_path: Path) -> None:
-    """Record mode still has a hard ceiling so a runaway service cannot
-    drive arbitrary resource usage just because an operator opted in."""
     out = tmp_path / "demo.recorded.toml"
     session = RecordingSession("demo", FakeEngine(), out)
     for i in range(RECORD_MAX_BLOCKS):
@@ -336,9 +336,6 @@ def test_session_record_mode_ceiling_enforced(tmp_path: Path) -> None:
 
 
 def test_recorded_file_does_not_auto_load_as_scope(tmp_path: Path) -> None:
-    """Even if the daemon writes photoshare.recorded.toml into the scope
-    directory, ScopeStore must not pick it up. Promotion is explicit:
-    operator renames it to photoshare.toml."""
     scope_dir = tmp_path / "scopes"
     scope_dir.mkdir()
     (scope_dir / "photoshare.recorded.toml").write_text(
@@ -349,57 +346,105 @@ def test_recorded_file_does_not_auto_load_as_scope(tmp_path: Path) -> None:
         store.get("photoshare")
 
 
-# --- server end-to-end over a real UDS, with a fake engine ---
+# --- server end-to-end over HTTP, with a fake engine ---
 
 
-class _ClientConn:
-    def __init__(self, sock_path: Path) -> None:
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._sock.connect(str(sock_path))
-        self._f = self._sock.makefile("rwb", buffering=0)
+class _HttpSession:
+    """Thin TestClient wrapper that owns a single platformd session for
+    the duration of the test call. Call create() to obtain the bearer
+    token; call acquire/drop/scale_hint to exercise the RPC surface."""
 
-    def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        request = {"id": 1, "method": method, "params": params or {}}
-        self._sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
-        line = self._f.readline()
-        return json.loads(line.decode("utf-8"))
+    def __init__(self, client: TestClient, service_id: str = "demo") -> None:
+        self._client = client
+        self._service_id = service_id
+        self.token: str | None = None
+        self.session_id: str | None = None
+
+    def create(self, service_id: str | None = None) -> dict[str, Any]:
+        sid = service_id or self._service_id
+        resp = self._client.post("/sessions", json={"service_id": sid})
+        body = resp.json()
+        if resp.status_code == 201:
+            self.token = body["token"]
+            self.session_id = body["session_id"]
+        return {"status": resp.status_code, "body": body}
+
+    def acquire(self, **body: Any) -> dict[str, Any]:
+        resp = self._client.post("/acquire", json=body, headers=self._headers())
+        return self._envelope(resp)
+
+    def drop(self) -> dict[str, Any]:
+        resp = self._client.post("/drop-to-scaling-only", headers=self._headers())
+        return self._envelope(resp)
+
+    def scale_hint(self, name: str, load_factor: float) -> dict[str, Any]:
+        resp = self._client.post(
+            "/scale-hint",
+            json={"name": name, "load_factor": load_factor},
+            headers=self._headers(),
+        )
+        return self._envelope(resp)
 
     def close(self) -> None:
-        self._f.close()
-        self._sock.close()
+        if self.token is None:
+            return
+        self._client.delete("/sessions", headers=self._headers())
+        self.token = None
+        self.session_id = None
+
+    def _headers(self) -> dict[str, str]:
+        assert self.token is not None, "call create() first"
+        return {"Authorization": f"Bearer {self.token}"}
+
+    def _envelope(self, resp: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {"status": resp.status_code}
+        if resp.status_code == 204:
+            return payload
+        body = resp.json()
+        if resp.status_code < 300:
+            payload["result"] = body
+        else:
+            detail = body.get("detail", {}) if isinstance(body, dict) else {}
+            payload["error"] = detail if isinstance(detail, dict) else {"message": str(detail)}
+        return payload
 
 
-@pytest.fixture
-def running_server(tmp_path: Path):
-    # macOS sun_path is limited to 104 bytes — pytest's tmp_path is too
-    # deep. Put the socket in a short /tmp path and keep the scopes/config
-    # under pytest's tmp_path as usual.
-    short_sock = Path(f"/tmp/nalsd-ptd-{uuid.uuid4().hex[:8]}.sock")
-
+def _build_server(
+    tmp_path: Path,
+    *,
+    service_id: str = "demo",
+    scope_files: dict[str, str] | None = None,
+    record_for: set[str] | None = None,
+) -> tuple[Server, dict[str, FakeEngine]]:
     scope_dir = tmp_path / "scopes"
-    scope_dir.mkdir()
-    (scope_dir / "demo.toml").write_text(
-        'service_id = "demo"\n'
-        'allowed_blocks = ["transactional-store", "object-store"]\n'
-        "max_blocks = 4\n"
-    )
+    scope_dir.mkdir(exist_ok=True)
+    for svc, body in (scope_files or {}).items():
+        (scope_dir / f"{svc}.toml").write_text(body)
+
+    cfg_lines = [
+        'listen_address = "127.0.0.1:0"',
+        'scope_dir = "scopes"',
+        'identities_path = "identities.toml"',
+    ]
+    for svc in record_for or ():
+        cfg_lines.append("")
+        cfg_lines.append(f"[service.{svc}]")
+        cfg_lines.append('mode = "record"')
     cfg_path = tmp_path / "platformd.toml"
-    cfg_path.write_text(
-        f'socket_path = "{short_sock}"\nscope_dir = "scopes"\nidentities_path = "identities.toml"\n'
-    )
+    cfg_path.write_text("\n".join(cfg_lines) + "\n")
     (tmp_path / "identities.toml").write_text(
-        f'[[identities]]\nuid = {os.getuid()}\nservice_id = "demo"\n'
+        f'[[identities]]\nservice_id = "{service_id}"\n'
     )
 
     config = load_daemon_config(cfg_path)
-    identities = Identities(by_uid={os.getuid(): "demo"})
+    identities = load_identities(config.identities_path)
     store = ScopeStore(scope_dir=config.scope_dir)
 
     engines: dict[str, FakeEngine] = {}
 
-    def factory(service_id: str) -> FakeEngine:
-        engines.setdefault(service_id, FakeEngine())
-        return engines[service_id]
+    def factory(sid: str) -> FakeEngine:
+        engines.setdefault(sid, FakeEngine())
+        return engines[sid]
 
     server = Server(
         config=config,
@@ -407,30 +452,34 @@ def running_server(tmp_path: Path):
         scope_store=store,
         engine_factory=factory,
     )
-    server.start()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield config.socket_path, engines
-    finally:
-        server.stop()
-        thread.join(timeout=2)
+    return server, engines
 
 
-def test_server_acquire_over_uds(running_server) -> None:
-    sock_path, engines = running_server
-    conn = _ClientConn(sock_path)
-    try:
-        resp = conn.call(
-            "Acquire",
-            {
-                "block_type": "transactional-store",
-                "name": "db",
-                "params": {"database": "demo"},
-            },
-        )
-    finally:
-        conn.close()
+@pytest.fixture
+def running_server(tmp_path: Path):
+    server, engines = _build_server(
+        tmp_path,
+        scope_files={
+            "demo": (
+                'service_id = "demo"\n'
+                'allowed_blocks = ["transactional-store", "object-store"]\n'
+                "max_blocks = 4\n"
+            )
+        },
+    )
+    with TestClient(server.app) as client:
+        yield client, engines
+
+
+def test_server_acquire_over_http(running_server) -> None:
+    client, engines = running_server
+    session = _HttpSession(client, service_id="demo")
+    session.create()
+    resp = session.acquire(
+        block_type="transactional-store",
+        name="db",
+        params={"database": "demo"},
+    )
     assert "error" not in resp, resp
     assert resp["result"]["block_type"] == "transactional-store"
     assert resp["result"]["name"] == "db"
@@ -438,108 +487,81 @@ def test_server_acquire_over_uds(running_server) -> None:
 
 
 def test_server_rejects_unknown_block(running_server) -> None:
-    sock_path, _ = running_server
-    conn = _ClientConn(sock_path)
-    try:
-        # Scope allows transactional-store and object-store but not kv.
-        resp = conn.call(
-            "Acquire",
-            {"block_type": "ephemeral-kv-cache", "name": "c"},
-        )
-    finally:
-        conn.close()
+    client, _ = running_server
+    session = _HttpSession(client, service_id="demo")
+    session.create()
+    resp = session.acquire(block_type="ephemeral-kv-cache", name="c")
     assert resp["error"]["code"] == "unknown_block"
 
 
-def test_server_privilege_drop_is_per_connection(running_server) -> None:
-    """Disconnect resets PrivilegeState — a new connection gets ACQUIRING
-    again. This is deliberate: a service-process restart must re-enter
-    the ACQUIRING phase so the v1 → v1.1 infrastructure-change demo works.
-    Within a single connection, the daemon enforces the drop regardless
-    of whatever the client reports."""
-    sock_path, _ = running_server
-    conn = _ClientConn(sock_path)
-    try:
-        conn.call("Acquire", {"block_type": "transactional-store", "name": "db"})
-        conn.call("DropToScalingOnly")
-        rejected = conn.call("Acquire", {"block_type": "object-store", "name": "images"})
-        assert rejected["error"]["code"] == "privilege_dropped"
-    finally:
-        conn.close()
+def test_server_rejects_unknown_service_id(running_server) -> None:
+    client, _ = running_server
+    session = _HttpSession(client, service_id="intruder")
+    resp = session.create()
+    assert resp["status"] == 401
+    assert resp["body"]["detail"]["code"] == "identity_rejected"
 
-    # Reconnect — privilege state should reset.
-    conn2 = _ClientConn(sock_path)
-    try:
-        resp = conn2.call("Acquire", {"block_type": "object-store", "name": "images"})
-    finally:
-        conn2.close()
-    assert "error" not in resp, resp
-    assert resp["result"]["name"] == "images"
+
+def test_server_rejects_missing_bearer(running_server) -> None:
+    client, _ = running_server
+    resp = client.post("/acquire", json={"block_type": "transactional-store", "name": "x"})
+    assert resp.status_code == 401
+
+
+def test_server_rejects_unknown_token(running_server) -> None:
+    client, _ = running_server
+    resp = client.post(
+        "/acquire",
+        json={"block_type": "transactional-store", "name": "x"},
+        headers={"Authorization": "Bearer not-a-real-token"},
+    )
+    assert resp.status_code == 401
+
+
+def test_server_privilege_drop_is_per_session(running_server) -> None:
+    """Service-process restart → new POST /sessions call → new session
+    starts back in ACQUIRING. This is deliberate: a service restart must
+    re-enter the ACQUIRING phase so the v1 → v1.1 infrastructure-change
+    demo works. Within a single session the daemon enforces the drop
+    regardless of what the client claims."""
+    client, _ = running_server
+
+    s1 = _HttpSession(client, service_id="demo")
+    s1.create()
+    s1.acquire(block_type="transactional-store", name="db")
+    s1.drop()
+    rejected = s1.acquire(block_type="object-store", name="images")
+    assert rejected["error"]["code"] == "privilege_dropped"
+    s1.close()
+
+    # New session — privilege state resets.
+    s2 = _HttpSession(client, service_id="demo")
+    s2.create()
+    ok = s2.acquire(block_type="object-store", name="images")
+    assert "error" not in ok, ok
+    assert ok["result"]["name"] == "images"
 
 
 @pytest.fixture
 def recording_server(tmp_path: Path):
     """Daemon in record mode for service 'demo' — NO scope file on disk."""
-    short_sock = Path(f"/tmp/nalsd-ptd-rec-{uuid.uuid4().hex[:8]}.sock")
-
+    server, engines = _build_server(
+        tmp_path,
+        service_id="demo",
+        record_for={"demo"},
+    )
     scope_dir = tmp_path / "scopes"
-    scope_dir.mkdir()
-    # Intentionally no demo.toml — record mode must not need one.
-
-    cfg_path = tmp_path / "platformd.toml"
-    cfg_path.write_text(
-        f'socket_path = "{short_sock}"\n'
-        f'scope_dir = "scopes"\n'
-        f'identities_path = "identities.toml"\n'
-        '\n[service.demo]\nmode = "record"\n'
-    )
-    (tmp_path / "identities.toml").write_text(
-        f'[[identities]]\nuid = {os.getuid()}\nservice_id = "demo"\n'
-    )
-
-    config = load_daemon_config(cfg_path)
-    identities = Identities(by_uid={os.getuid(): "demo"})
-    store = ScopeStore(scope_dir=config.scope_dir)
-    engines: dict[str, FakeEngine] = {}
-
-    def factory(service_id: str) -> FakeEngine:
-        engines.setdefault(service_id, FakeEngine())
-        return engines[service_id]
-
-    server = Server(
-        config=config,
-        identities=identities,
-        scope_store=store,
-        engine_factory=factory,
-    )
-    server.start()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield config.socket_path, scope_dir, engines
-    finally:
-        server.stop()
-        thread.join(timeout=2)
+    with TestClient(server.app) as client:
+        yield client, scope_dir, engines
 
 
 def test_server_record_mode_end_to_end(recording_server) -> None:
-    """Full loop: mode=record, no scope file, service connects, acquires
-    blocks that would normally require a scope, drops — daemon writes
-    demo.recorded.toml next to where the enforced scope would live."""
-    sock_path, scope_dir, _engines = recording_server
-    conn = _ClientConn(sock_path)
-    try:
-        r1 = conn.call(
-            "Acquire",
-            {"block_type": "transactional-store", "name": "db"},
-        )
-        r2 = conn.call(
-            "Acquire",
-            {"block_type": "ephemeral-kv-cache", "name": "cache"},
-        )
-        r3 = conn.call("DropToScalingOnly")
-    finally:
-        conn.close()
+    client, scope_dir, _engines = recording_server
+    session = _HttpSession(client, service_id="demo")
+    session.create()
+    r1 = session.acquire(block_type="transactional-store", name="db")
+    r2 = session.acquire(block_type="ephemeral-kv-cache", name="cache")
+    r3 = session.drop()
 
     assert "error" not in r1, r1
     assert "error" not in r2, r2
@@ -548,17 +570,11 @@ def test_server_record_mode_end_to_end(recording_server) -> None:
     recorded = scope_dir / "demo.recorded.toml"
     assert recorded.is_file(), "daemon must write recorded scope on drop"
 
-    # Parses as valid TOML and captures what the service actually did.
     parsed = tomllib.loads(recorded.read_text())
     assert parsed["service_id"] == "demo"
-    assert set(parsed["allowed_blocks"]) == {
-        "transactional-store",
-        "ephemeral-kv-cache",
-    }
+    assert set(parsed["allowed_blocks"]) == {"transactional-store", "ephemeral-kv-cache"}
     assert parsed["max_blocks"] == 2
 
-    # The recorded file must be loadable as a ServiceScope — promotion
-    # is just a rename operation.
     promoted = scope_dir / "demo.toml"
     promoted.write_text(recorded.read_text())
     scope = load_scope(promoted)
@@ -567,135 +583,51 @@ def test_server_record_mode_end_to_end(recording_server) -> None:
     assert BlockType.EPHEMERAL_KV_CACHE in scope.allowed_blocks
 
 
-def _run_server(
-    tmp_path: Path, *, record_for: set[str], scope_files: dict[str, str]
-) -> tuple[Server, Path, Path, dict[str, FakeEngine], threading.Thread]:
-    """Spin up a Server wired to tmp_path with the given mode configuration.
-
-    record_for    — set of service_ids to run in record mode.
-    scope_files   — service_id → TOML contents for scope files to place
-                    on disk before the server starts.
-
-    Returns the running server, the socket path, the scope dir, the
-    engine registry, and the serving thread so the caller can stop()
-    cleanly.
-    """
-    short_sock = Path(f"/tmp/nalsd-ptd-s9-{uuid.uuid4().hex[:8]}.sock")
-    scope_dir = tmp_path / "scopes"
-    scope_dir.mkdir(exist_ok=True)
-    for svc, body in scope_files.items():
-        (scope_dir / f"{svc}.toml").write_text(body)
-
-    cfg_lines = [
-        f'socket_path = "{short_sock}"',
-        'scope_dir = "scopes"',
-        'identities_path = "identities.toml"',
-    ]
-    for svc in record_for:
-        cfg_lines.append("")
-        cfg_lines.append(f"[service.{svc}]")
-        cfg_lines.append('mode = "record"')
-    cfg_path = tmp_path / "platformd.toml"
-    cfg_path.write_text("\n".join(cfg_lines) + "\n")
-    (tmp_path / "identities.toml").write_text(
-        f'[[identities]]\nuid = {os.getuid()}\nservice_id = "photoshare"\n'
-    )
-
-    config = load_daemon_config(cfg_path)
-    identities = Identities(by_uid={os.getuid(): "photoshare"})
-    store = ScopeStore(scope_dir=config.scope_dir)
-    engines: dict[str, FakeEngine] = {}
-
-    def factory(service_id: str) -> FakeEngine:
-        engines.setdefault(service_id, FakeEngine())
-        return engines[service_id]
-
-    server = Server(
-        config=config,
-        identities=identities,
-        scope_store=store,
-        engine_factory=factory,
-    )
-    server.start()
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server, config.socket_path, scope_dir, engines, thread
-
-
 def test_full_record_then_enforce_flow(tmp_path: Path) -> None:
-    """The Stage 9 bootstrap story: a new service comes up under a
-    recording daemon, acquires whatever it needs, drops; the operator
-    reviews the recorded scope, renames it to promote, flips the daemon
-    to enforce; the service reconnects and the daemon now honours the
-    scope as a hard authorization boundary — the same acquires succeed,
-    a NEW acquire outside the recorded scope is rejected.
-
-    This exercises every Stage 8 seam end-to-end against a real UDS
-    with a FakeEngine. The Docker E2E in test_e2e_privilege_drop.py
-    covers the in-process path; this is the split-topology equivalent
-    for the record→promote→enforce lifecycle."""
+    """A new service comes up under a recording daemon, acquires whatever
+    it needs, drops; the operator reviews the recorded scope, renames it to
+    promote, flips the daemon to enforce; the service reconnects and the
+    daemon now honours the scope as a hard authorization boundary — same
+    acquires succeed, a NEW acquire outside the recorded scope is rejected."""
 
     # --- Phase 1: record ---
-    server, sock_path, scope_dir, _, thread = _run_server(
-        tmp_path, record_for={"photoshare"}, scope_files={}
+    server, _ = _build_server(
+        tmp_path,
+        service_id="photoshare",
+        record_for={"photoshare"},
     )
-    try:
-        conn = _ClientConn(sock_path)
-        try:
-            r1 = conn.call(
-                "Acquire",
-                {"block_type": "transactional-store", "name": "photos"},
-            )
-            assert "error" not in r1, r1
-            r2 = conn.call("DropToScalingOnly")
-            assert "error" not in r2, r2
-        finally:
-            conn.close()
-    finally:
-        server.stop()
-        thread.join(timeout=2)
+    scope_dir = tmp_path / "scopes"
+    with TestClient(server.app) as client:
+        session = _HttpSession(client, service_id="photoshare")
+        session.create()
+        r1 = session.acquire(block_type="transactional-store", name="photos")
+        assert "error" not in r1, r1
+        r2 = session.drop()
+        assert "error" not in r2, r2
 
     recorded = scope_dir / "photoshare.recorded.toml"
     assert recorded.is_file()
-    # Operator reviews, then promotes by renaming.
     promoted = scope_dir / "photoshare.toml"
     recorded.rename(promoted)
-    assert not recorded.exists()
-    assert promoted.is_file()
 
-    # --- Phase 2: enforce (new daemon, same scope dir) ---
-    server2, sock_path2, _, _, thread2 = _run_server(tmp_path, record_for=set(), scope_files={})
-    try:
-        conn = _ClientConn(sock_path2)
-        try:
-            # Within recorded scope — allowed.
-            ok = conn.call(
-                "Acquire",
-                {"block_type": "transactional-store", "name": "photos"},
-            )
-            assert "error" not in ok, ok
-
-            # Outside recorded scope — must be rejected. object-store
-            # was never seen during recording, so enforce must refuse.
-            rejected = conn.call(
-                "Acquire",
-                {"block_type": "object-store", "name": "images"},
-            )
-            assert rejected["error"]["code"] == "unknown_block", rejected
-        finally:
-            conn.close()
-    finally:
-        server2.stop()
-        thread2.join(timeout=2)
+    # --- Phase 2: enforce (new Server instance, same scope dir) ---
+    server2, _ = _build_server(
+        tmp_path,
+        service_id="photoshare",
+    )
+    with TestClient(server2.app) as client:
+        session = _HttpSession(client, service_id="photoshare")
+        session.create()
+        ok = session.acquire(block_type="transactional-store", name="photos")
+        assert "error" not in ok, ok
+        rejected = session.acquire(block_type="object-store", name="images")
+        assert rejected["error"]["code"] == "unknown_block", rejected
 
 
 # --- destroy CLI ---
 
 
 def test_destroy_cli_requires_matching_confirmation(monkeypatch, capsys):
-    """Interactive destroy aborts when the typed confirmation differs from
-    the service_id. Guards against fat-finger destruction of the wrong
-    stack — operator must type the exact name."""
     from platformd.__main__ import main
 
     monkeypatch.setattr("builtins.input", lambda _prompt: "wrong-name")
@@ -706,8 +638,6 @@ def test_destroy_cli_requires_matching_confirmation(monkeypatch, capsys):
 
 
 def test_destroy_cli_requires_matching_confirmation_eof(monkeypatch, capsys):
-    """If stdin is closed (e.g. piped from a script with no confirmation),
-    destroy aborts rather than proceeding on empty input."""
     from platformd.__main__ import main
 
     def _eof(_prompt):
@@ -720,9 +650,6 @@ def test_destroy_cli_requires_matching_confirmation_eof(monkeypatch, capsys):
 
 
 def test_destroy_cli_yes_flag_skips_confirmation(monkeypatch):
-    """--yes bypasses the interactive prompt for automation. The engine
-    itself is a no-op here (no such stack exists), so the exit code comes
-    from the clean destroy-on-nonexistent-stack path."""
     from platformd.__main__ import main
 
     calls: list[str] = []
@@ -741,7 +668,6 @@ def test_destroy_cli_yes_flag_skips_confirmation(monkeypatch):
 
 
 def test_destroy_cli_proceeds_on_correct_confirmation(monkeypatch):
-    """Typing the exact service_id at the prompt proceeds with destroy."""
     from platformd.__main__ import main
 
     calls: list[str] = []

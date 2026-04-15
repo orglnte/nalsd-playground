@@ -1,30 +1,27 @@
 """
-platform_api.Client — UDS client for platformd.
+platform_api.Client — HTTP client for platformd.
 
-This is a thin transport-and-codec layer. It owns a socket, serialises
-JSON-RPC calls onto it, and decodes error responses back into the
-PlatformError hierarchy via platform_api.protocol.
+Thin wrapper over `httpx.Client`. The method surface mirrors the
+daemon's OpenAPI spec (`POST /sessions`, `POST /acquire`,
+`POST /drop-to-scaling-only`, `POST /scale-hint`, `DELETE /sessions`).
 
-Crucially, the Client does NOT track PrivilegeState or any other piece
-of session state. The daemon is the sole authority on what calls are
-legal at any given moment; every method round-trips, and the daemon's
-answer is the answer. An earlier version of this class mirrored the
-state machine locally as a round-trip optimization; the duplication
-grew a second copy of the transition logic, a second error-code table,
-and a test whose whole purpose was to prove the local copy was not
-load-bearing. Deleting the local copy is simpler, and the
-trust-boundary semantics are unchanged.
+The Client does NOT track PrivilegeState or any other piece of session
+state. The daemon is the sole authority on what calls are legal at any
+given moment; every method round-trips, and the daemon's answer is the
+answer. The Client holds only the bearer token obtained at `connect()`
+and uses it as `Authorization: Bearer` on every subsequent request.
 """
 
 from __future__ import annotations
 
-import json
+import contextlib
 import logging
-import socket
-from pathlib import Path
 from typing import Any
 
-from platform_api.protocol import decode_credentials, encode_block_spec, exception_for
+import httpx
+
+from platform_api.errors import PlatformError, ProvisioningError
+from platform_api.protocol import exception_for
 from platform_api.types import (
     BlockSpec,
     BlockType,
@@ -36,7 +33,7 @@ from platform_api.types import (
 
 log = logging.getLogger("platform_api.client")
 
-DEFAULT_SOCKET_PATH = Path("dev-config/run/platformd.sock")
+DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 
 
 class Client:
@@ -44,38 +41,46 @@ class Client:
         self,
         service_id: str,
         *,
-        socket_path: Path | str = DEFAULT_SOCKET_PATH,
+        base_url: str | None = None,
+        timeout: float = 30.0,
+        http_client: httpx.Client | None = None,
     ) -> None:
         self.service_id = service_id
-        self._socket_path = Path(socket_path)
-        self._sock: socket.socket | None = None
-        self._reader: Any = None
-        self._next_id = 0
+        self._base_url = base_url or DEFAULT_BASE_URL
+        self._timeout = timeout
+        self._http: httpx.Client | None = http_client
+        self._owns_http = http_client is None
+        self._token: str | None = None
+        self._session_id: str | None = None
 
     def connect(self) -> None:
-        if self._sock is not None:
+        if self._token is not None:
             return
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.connect(str(self._socket_path))
-        self._sock = s
-        self._reader = s.makefile("rb", buffering=0)
+        if self._http is None:
+            self._http = httpx.Client(base_url=self._base_url, timeout=self._timeout)
+        resp = self._http.post("/sessions", json={"service_id": self.service_id})
+        body = self._parse_or_raise(resp, "POST /sessions")
+        self._session_id = body["session_id"]
+        self._token = body["token"]
         log.info(
-            "client connected: service=%s socket=%s",
+            "client session started: service=%s session=%s",
             self.service_id,
-            self._socket_path,
+            self._session_id,
         )
 
     def close(self) -> None:
-        if self._reader is not None:
+        if self._http is None:
+            return
+        if self._token is not None:
+            with contextlib.suppress(Exception):
+                self._http.delete("/sessions", headers=self._auth_headers())
+        self._token = None
+        self._session_id = None
+        if self._owns_http:
             try:
-                self._reader.close()
+                self._http.close()
             finally:
-                self._reader = None
-        if self._sock is not None:
-            try:
-                self._sock.close()
-            finally:
-                self._sock = None
+                self._http = None
 
     def __enter__(self) -> Client:
         self.connect()
@@ -97,7 +102,6 @@ class Client:
         **params: Any,
     ) -> Credentials:
         bt = BlockType(block_type) if isinstance(block_type, str) else block_type
-        compute = ComputeSpec(memory_mb=memory_mb) if memory_mb is not None else None
 
         if persistent and ram_backed:
             raise ValueError("persistent=True and ram_backed=True are mutually exclusive")
@@ -108,63 +112,104 @@ class Client:
         else:
             persistence = Persistence.EPHEMERAL
 
-        storage: StorageSpec | None
+        storage_spec: StorageSpec | None
         if storage_mb is not None or persistent or ram_backed:
-            storage = StorageSpec(size_mb=storage_mb, persistence=persistence)
+            storage_spec = StorageSpec(size_mb=storage_mb, persistence=persistence)
         else:
-            storage = None
+            storage_spec = None
 
-        spec = BlockSpec(
+        compute_spec = ComputeSpec(memory_mb=memory_mb) if memory_mb is not None else None
+
+        # Client-side validation: surfaces e.g. the rps+compute XOR rule as
+        # a ValueError before we round-trip.
+        BlockSpec(
             name=name,
             block_type=bt,
-            compute=compute,
-            storage=storage,
+            compute=compute_spec,
+            storage=storage_spec,
             rps=rps,
             params=params,
         )
-        result = self._call("Acquire", encode_block_spec(spec))
-        return decode_credentials(result)
+
+        body: dict[str, Any] = {
+            "block_type": bt.value,
+            "name": name,
+            "params": params,
+        }
+        if compute_spec is not None:
+            body["compute"] = {"memory_mb": compute_spec.memory_mb}
+        if storage_spec is not None:
+            storage_payload: dict[str, Any] = {"persistence": storage_spec.persistence.value}
+            if storage_spec.size_mb is not None:
+                storage_payload["size_mb"] = storage_spec.size_mb
+            body["storage"] = storage_payload
+        if rps is not None:
+            body["rps"] = rps
+
+        result = self._post("/acquire", body)
+        return Credentials(
+            block_type=BlockType(result["block_type"]),
+            name=result["name"],
+            host=result["host"],
+            port=result["port"],
+            username=result.get("username"),
+            password=result.get("password"),
+            database=result.get("database"),
+            extras=result.get("extras") or {},
+        )
 
     def drop_to_scaling_only(self) -> None:
-        self._call("DropToScalingOnly", {})
+        self._post("/drop-to-scaling-only", None, expect_body=False)
 
     def scale_hint(self, name: str, *, load_factor: float) -> None:
-        self._call("ScaleHint", {"name": name, "load_factor": load_factor})
+        self._post(
+            "/scale-hint",
+            {"name": name, "load_factor": load_factor},
+            expect_body=False,
+        )
 
     def shutdown(self) -> None:
-        if self._sock is None:
-            return
-        try:
-            self._call("Shutdown", {})
-        except Exception:
-            pass
-        finally:
-            self.close()
+        self.close()
 
-    def _call(self, method: str, params: dict[str, Any]) -> Any:
-        if self._sock is None:
+    # -- internals --
+
+    def _auth_headers(self) -> dict[str, str]:
+        assert self._token is not None, "client is not connected"
+        return {"Authorization": f"Bearer {self._token}"}
+
+    def _post(
+        self, path: str, body: dict[str, Any] | None, *, expect_body: bool = True
+    ) -> Any:
+        if self._http is None or self._token is None:
             raise RuntimeError("client is not connected; call connect() first")
-        self._next_id += 1
-        request = {"id": self._next_id, "method": method, "params": params}
-        payload = (json.dumps(request) + "\n").encode("utf-8")
-        self._sock.sendall(payload)
+        resp = self._http.post(path, json=body, headers=self._auth_headers())
+        return self._parse_or_raise(resp, f"POST {path}", expect_body=expect_body)
 
-        line = self._reader.readline()
-        if not line:
-            from platform_api.errors import ProvisioningError
+    def _parse_or_raise(
+        self, resp: httpx.Response, context: str, *, expect_body: bool = True
+    ) -> Any:
+        if 200 <= resp.status_code < 300:
+            if not expect_body or resp.status_code == 204:
+                return None
+            try:
+                return resp.json()
+            except ValueError as e:
+                raise ProvisioningError(f"{context}: malformed JSON response: {e}") from e
 
-            raise ProvisioningError(f"platformd closed the connection during {method}")
+        detail = self._decode_error_detail(resp)
+        if isinstance(detail, dict) and isinstance(detail.get("code"), str):
+            exc = exception_for(detail["code"], detail.get("message") or "unknown error")
+            if isinstance(exc, PlatformError):
+                raise exc
+            raise exc
+        message = detail if isinstance(detail, str) else resp.text or "<empty>"
+        raise ProvisioningError(f"{context}: HTTP {resp.status_code}: {message}")
+
+    def _decode_error_detail(self, resp: httpx.Response) -> Any:
         try:
-            response = json.loads(line.decode("utf-8"))
-        except json.JSONDecodeError as e:
-            from platform_api.errors import ProvisioningError
-
-            raise ProvisioningError(f"malformed response from platformd: {e}") from e
-
-        if "error" in response:
-            err = response["error"]
-            raise exception_for(
-                err.get("code", "internal_error"),
-                err.get("message", "unknown error"),
-            )
-        return response.get("result")
+            payload = resp.json()
+        except ValueError:
+            return None
+        if isinstance(payload, dict) and "detail" in payload:
+            return payload["detail"]
+        return payload

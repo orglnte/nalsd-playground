@@ -1,4 +1,4 @@
-socket_path = "run/platformd.sock"
+listen_address = "127.0.0.1:8443"
 scope_dir = "scopes"
 identities_path = "identities.toml"
 
