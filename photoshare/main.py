@@ -9,15 +9,17 @@ what infrastructure exists.
 
 from __future__ import annotations
 
-import io
 import logging
 import random
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Query, Response, UploadFile
-from minio import Minio
-from minio.error import S3Error
+import aioboto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from psycopg_pool import ConnectionPool
 
 from photoshare.bootstrap import bootstrap
@@ -60,10 +62,16 @@ def _make_pool(creds: Credentials) -> ConnectionPool:
     )
 
 
-def _ensure_bucket(client: Minio, bucket: str) -> None:
-    if not client.bucket_exists(bucket):
-        client.make_bucket(bucket)
-        log.info("created object-store bucket %s", bucket)
+async def _ensure_bucket(s3: Any, bucket: str) -> None:
+    try:
+        await s3.head_bucket(Bucket=bucket)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchBucket"):
+            await s3.create_bucket(Bucket=bucket)
+            log.info("created object-store bucket %s", bucket)
+        else:
+            raise
 
 
 def create_app(
@@ -71,27 +79,37 @@ def create_app(
     db: Credentials,
     store: Credentials | None,
 ) -> FastAPI:
-    app = FastAPI(title="photoshare", version="0.1.0")
+    pool = _make_pool(db)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if store is None:
+            app.state.s3 = None
+            app.state.bucket = None
+            yield
+            return
+        session = aioboto3.Session()
+        async with session.client(
+            "s3",
+            endpoint_url=f"http://{store.host}:{store.port}",
+            aws_access_key_id=store.username,
+            aws_secret_access_key=store.password,
+            region_name="us-east-1",
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+            ),
+        ) as s3:
+            bucket_name = store.extras.get("bucket", store.name)
+            await _ensure_bucket(s3, bucket_name)
+            app.state.s3 = s3
+            app.state.bucket = bucket_name
+            yield
+
+    app = FastAPI(title="photoshare", version="0.1.0", lifespan=lifespan)
     app.state.platform = platform
     app.state.db = db
     app.state.store = store
-
-    pool = _make_pool(db)
-
-    minio_client: Minio | None = None
-    bucket_name: str | None = None
-    if store is not None:
-        minio_client = Minio(
-            f"{store.host}:{store.port}",
-            access_key=store.username,
-            secret_key=store.password,
-            secure=False,
-        )
-        bucket_name = store.extras.get("bucket", store.name)
-        _ensure_bucket(minio_client, bucket_name)
-
-    app.state.minio = minio_client
-    app.state.bucket = bucket_name
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -148,9 +166,6 @@ def create_app(
         }
 
     if store is not None:
-        assert minio_client is not None
-        assert bucket_name is not None
-
         _WORDS = [
             "sunset",
             "beach",
@@ -172,7 +187,10 @@ def create_app(
         _UPLOAD_FILE_DEFAULT = File(None)
 
         @app.post("/photos", status_code=201)
-        async def upload_photo(file: UploadFile | None = _UPLOAD_FILE_DEFAULT) -> dict[str, Any]:
+        async def upload_photo(
+            request: Request,
+            file: UploadFile | None = _UPLOAD_FILE_DEFAULT,
+        ) -> dict[str, Any]:
             photo_id = uuid.uuid4().hex
             title = _random_title()
 
@@ -187,12 +205,11 @@ def create_app(
                 filename = f"{photo_id}.bin"
 
             size = len(data)
-            minio_client.put_object(
-                bucket_name,
-                photo_id,
-                io.BytesIO(data),
-                length=size,
-                content_type=content_type,
+            await request.app.state.s3.put_object(
+                Bucket=request.app.state.bucket,
+                Key=photo_id,
+                Body=data,
+                ContentType=content_type,
             )
             with pool.connection() as conn:
                 with conn.cursor() as cur:
@@ -210,7 +227,7 @@ def create_app(
             }
 
         @app.get("/photos/{photo_id}")
-        def fetch_photo(photo_id: str) -> Response:
+        async def fetch_photo(request: Request, photo_id: str) -> Response:
             with pool.connection() as conn, conn.cursor() as cur:
                 cur.execute(
                     "SELECT content_type FROM photos WHERE id = %s",
@@ -221,14 +238,17 @@ def create_app(
                 raise HTTPException(status_code=404, detail="photo not found")
             content_type = row[0]
             try:
-                obj = minio_client.get_object(bucket_name, photo_id)
-            except S3Error as e:
-                raise HTTPException(status_code=500, detail=f"object-store error: {e.code}") from e
-            try:
-                data = obj.read()
-            finally:
-                obj.close()
-                obj.release_conn()
+                resp = await request.app.state.s3.get_object(
+                    Bucket=request.app.state.bucket,
+                    Key=photo_id,
+                )
+            except ClientError as e:
+                code = e.response.get("Error", {}).get("Code", "unknown")
+                raise HTTPException(
+                    status_code=500, detail=f"object-store error: {code}"
+                ) from e
+            async with resp["Body"] as stream:
+                data = await stream.read()
             return Response(content=data, media_type=content_type)
 
     else:

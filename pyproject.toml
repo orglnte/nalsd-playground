@@ -9,7 +9,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "psycopg[binary]>=3.1",
-    "minio>=7.2",
+    "aioboto3>=13",
     "redis>=5.0",
     "python-multipart>=0.0.9",
 ]
@@ -68,7 +68,8 @@ exclude = ["\\.pulumi/", "\\.pulumi_state/", "tmp/", "build/", "scripts/"]
 module = [
     "pulumi.*",
     "pulumi_docker.*",
-    "minio.*",
+    "aioboto3.*",
+    "botocore.*",
     "psycopg_pool.*",
 ]
 ignore_missing_imports = true

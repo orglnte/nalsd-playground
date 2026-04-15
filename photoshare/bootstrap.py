@@ -62,7 +62,7 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     # Adding this acquire() call *is* the infrastructure change. No YAML
     # beyond the daemon's scope file (which already permits object-store
     # for photoshare), no Terraform, no deploy pipeline. Restart the
-    # service and platformd provisions a new MinIO container mid-lifecycle;
+    # service and platformd provisions a new rustfs container mid-lifecycle;
     # main.py then sees `store is not None` and registers the upload
     # endpoints that were absent in v1.
     store = platform.acquire(BlockType.OBJECT_STORE, name="photos")
