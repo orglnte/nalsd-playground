@@ -5,8 +5,9 @@ This function *is* the infrastructure declaration. Editing it to add an
 acquire() call and restarting the service causes platformd to provision
 the new resource — no manifest, Terraform, or deploy pipeline involved.
 
-v1  : transactional-store only. Upload endpoint is absent by construction.
-v1.1: additionally acquires object-store. Upload endpoint becomes available.
+The current bootstrap acquires transactional-store and object-store. An
+earlier commit acquired only transactional-store; the upload endpoint was
+absent by construction in that version.
 
 Scope is owned by platformd (dev-config/scopes/photoshare.toml). The
 service no longer constructs a scope locally; it connects to the daemon
@@ -38,7 +39,7 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     Run the acquire phase against platformd, then drop privileges.
 
     Returns (client, db_credentials, store_credentials).
-    store_credentials is None in v1.
+    store_credentials is None when the bootstrap doesn't acquire object-store.
     """
     log.info("photoshare bootstrap: ACQUIRING phase begin")
     platform = Client("photoshare", base_url=_base_url())
@@ -58,20 +59,20 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     applied = apply_manifesto(db, MIGRATIONS_DIR)
     log.info("bootstrap: manifesto applied=%s", applied)
 
-    # --- v1.1 insertion point ---
+    # --- object-store acquire ---
     # Adding this acquire() call *is* the infrastructure change. No YAML
     # beyond the daemon's scope file (which already permits object-store
     # for photoshare), no Terraform, no deploy pipeline. Restart the
     # service and platformd provisions a new rustfs container mid-lifecycle;
     # main.py then sees `store is not None` and registers the upload
-    # endpoints that were absent in v1.
+    # endpoints that were absent before this acquire was added.
     store = platform.acquire(BlockType.OBJECT_STORE, name="photos")
     log.info(
         "bootstrap: object-store 'photos' acquired at %s:%d",
         store.host,
         store.port,
     )
-    # --- end v1.1 insertion point ---
+    # --- end object-store acquire ---
 
     platform.drop_to_scaling_only()
     log.info("bootstrap: privileges dropped, now OPERATIONAL")

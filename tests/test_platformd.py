@@ -521,9 +521,9 @@ def test_server_rejects_unknown_token(running_server) -> None:
 def test_server_privilege_drop_is_per_session(running_server) -> None:
     """Service-process restart → new POST /sessions call → new session
     starts back in ACQUIRING. This is deliberate: a service restart must
-    re-enter the ACQUIRING phase so the v1 → v1.1 infrastructure-change
-    demo works. Within a single session the daemon enforces the drop
-    regardless of what the client claims."""
+    re-enter the ACQUIRING phase so the demo where a new acquire() lands
+    after the first run works. Within a single session the daemon enforces
+    the drop regardless of what the client claims."""
     client, _ = running_server
 
     s1 = _HttpSession(client, service_id="demo")

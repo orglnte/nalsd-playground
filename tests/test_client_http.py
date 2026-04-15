@@ -149,7 +149,8 @@ def test_client_string_block_type_accepted(daemon) -> None:
 
 def test_new_session_resets_privilege_state(daemon) -> None:
     """A service that reconnects (new POST /sessions) starts back in
-    ACQUIRING. Enables the v1 → v1.1 restart-the-service demo."""
+    ACQUIRING. Enables the restart-the-service demo where a new acquire()
+    call lands after the first run."""
     http, _ = daemon
     with _client(http) as client:
         client.acquire(BlockType.TRANSACTIONAL_STORE, name="db")
