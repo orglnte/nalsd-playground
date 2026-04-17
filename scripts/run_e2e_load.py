@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nalsd E2E load test — subclass of PEM's LoadTestOrchestrator.
+SARP E2E load test — subclass of PEM's LoadTestOrchestrator.
 
 Usage:
     python scripts/run_e2e_load.py [--rps 1000] [--duration 10m] [--rustfs-mem 1g]
@@ -33,10 +33,10 @@ spec.loader.exec_module(lib)
 VENV_PYTHON = str(REPO / ".venv/bin/python")
 
 
-class NalsdLoadTest(lib.LoadTestOrchestrator):
+class SarpLoadTest(lib.LoadTestOrchestrator):
     containers: ClassVar[list[str]] = [
-        "nalsd-photoshare-metadata",
-        "nalsd-photoshare-photos",
+        "sarp-photoshare-metadata",
+        "sarp-photoshare-photos",
     ]
     k6_script = "scripts/k6/photo-app.ts"
     repo = REPO
@@ -103,7 +103,7 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
 
         # Raise RustFS memory
         mem = self.args.rustfs_mem
-        rustfs = "nalsd-photoshare-photos"
+        rustfs = "sarp-photoshare-photos"
         # --memory-swap equal to --memory means zero swap allowed
         lib.shell(f"docker update --memory {mem} --memory-swap {mem} {rustfs}")
         print(f"  RustFS memory set to {mem}")
@@ -127,13 +127,13 @@ class NalsdLoadTest(lib.LoadTestOrchestrator):
         self._platformd_log.close()
 
         # Collect RustFS internal log
-        rustfs = "nalsd-photoshare-photos"
+        rustfs = "sarp-photoshare-photos"
         r = lib.shell(f"docker exec {rustfs} cat /logs/rustfs.log", check=False, timeout=10)
         (self.results_dir / "rustfs_internal.log").write_text(r.stdout)
 
 
 if __name__ == "__main__":
-    test = NalsdLoadTest()
+    test = SarpLoadTest()
 
     # Graceful shutdown on SIGTERM/SIGINT
     def _handle_signal(sig, frame):

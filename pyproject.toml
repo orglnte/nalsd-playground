@@ -1,5 +1,5 @@
 [project]
-name = "nalsd"
+name = "sarp"
 version = "0.1.0"
 description = "Runtime infrastructure-from-code prototype"
 requires-python = ">=3.11"

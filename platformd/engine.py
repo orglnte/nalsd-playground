@@ -49,7 +49,7 @@ class PulumiDockerEngine:
         self,
         service_id: str,
         *,
-        project_name: str = "nalsd-platform",
+        project_name: str = "sarp-platform",
     ) -> None:
         _setup_pulumi_env()
         self.service_id = service_id
@@ -146,7 +146,7 @@ class PulumiDockerEngine:
             docker.Container(
                 f"ctr-{lease_name}",
                 image=image.image_id,
-                name=f"nalsd-{self.service_id}-{lease_name}",
+                name=f"sarp-{self.service_id}-{lease_name}",
                 envs=envs,
                 command=backend.command,
                 ports=ports,
