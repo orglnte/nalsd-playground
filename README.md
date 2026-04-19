@@ -15,7 +15,7 @@ python3 -m venv .venv
 .venv/bin/python -m platformd --config dev-config/platformd.toml
 
 # run the demo service (another terminal)
-.venv/bin/python -m photoshare
+.venv/bin/python -m photoshare_demo
 ```
 
 The service exposes a small HTTP API; open `http://127.0.0.1:8000` to use it.

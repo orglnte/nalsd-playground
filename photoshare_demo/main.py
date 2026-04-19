@@ -1,5 +1,5 @@
 """
-photoshare FastAPI app.
+photoshare-demo FastAPI app.
 
 The app's feature surface is a strict function of which building blocks the
 bootstrap phase acquired. If object-store credentials are absent, the upload
@@ -22,10 +22,10 @@ from botocore.exceptions import ClientError
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from psycopg_pool import ConnectionPool
 
-from photoshare.bootstrap import bootstrap
+from photoshare_demo.bootstrap import bootstrap
 from platform_api import Client, Credentials
 
-log = logging.getLogger("photoshare.main")
+log = logging.getLogger("photoshare_demo.main")
 
 
 # Reserve a small headroom below postgres max_connections for admin /
@@ -106,7 +106,7 @@ def create_app(
             app.state.bucket = bucket_name
             yield
 
-    app = FastAPI(title="photoshare", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="photoshare-demo", version="0.1.0", lifespan=lifespan)
     app.state.platform = platform
     app.state.db = db
     app.state.store = store
@@ -259,7 +259,7 @@ def create_app(
                 status_code=503,
                 detail=(
                     "upload unavailable: object-store not acquired in this "
-                    "version of the service — edit photoshare/bootstrap.py to "
+                    "version of the service — edit photoshare_demo/bootstrap.py to "
                     "enable"
                 ),
             )

@@ -1,5 +1,5 @@
 """
-photoshare startup sequence.
+photoshare-demo startup sequence.
 
 This function *is* the infrastructure declaration. Editing it to add an
 acquire() call and restarting the service causes platformd to provision
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from platform_api import BlockType, Client, Credentials, apply_manifesto
 
-log = logging.getLogger("photoshare.bootstrap")
+log = logging.getLogger("photoshare_demo.bootstrap")
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
@@ -41,7 +41,7 @@ def bootstrap() -> tuple[Client, Credentials, Credentials | None]:
     Returns (client, db_credentials, store_credentials).
     store_credentials is None when the bootstrap doesn't acquire object-store.
     """
-    log.info("photoshare bootstrap: ACQUIRING phase begin")
+    log.info("photoshare-demo bootstrap: ACQUIRING phase begin")
     platform = Client("photoshare", base_url=_base_url())
     platform.connect()
 

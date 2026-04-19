@@ -1,4 +1,4 @@
-"""Run the photoshare service with `python -m photoshare`."""
+"""Run the photoshare-demo service with `python -m photoshare_demo`."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 
 import uvicorn
 
-from photoshare.main import build
+from photoshare_demo.main import build
 
 
 def main() -> None:

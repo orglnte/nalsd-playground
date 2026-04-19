@@ -1,10 +1,10 @@
-"""Tests for the photoshare pool sizing — verifies that the app scales
+"""Tests for the photoshare-demo pool sizing — verifies that the app scales
 its psycopg pool against capacity hints surfaced by the daemon, not
 against cell constants."""
 
 from __future__ import annotations
 
-from photoshare.main import plan_pool
+from photoshare_demo.main import plan_pool
 from platform_api.types import BlockType, Credentials
 
 

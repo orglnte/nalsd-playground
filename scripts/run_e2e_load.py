@@ -48,7 +48,7 @@ class SarpLoadTest(lib.LoadTestOrchestrator):
 
     def setup(self) -> int | None:
         # Clean old state
-        for pattern in ["bench_service", "python -m photoshare", "python -m platformd"]:
+        for pattern in ["bench_service", "python -m photoshare_demo", "python -m platformd"]:
             subprocess.run(f"pkill -9 -f '{pattern}'", shell=True, capture_output=True)
         for port in [8080, 8090]:
             subprocess.run(
@@ -74,7 +74,7 @@ class SarpLoadTest(lib.LoadTestOrchestrator):
         print("  starting photoshare (provisions containers + serves)...")
         self._app_log = open(self.results_dir / "photoshare.log", "w")  # noqa: SIM115
         self._app = subprocess.Popen(
-            f"{VENV_PYTHON} -m photoshare",
+            f"{VENV_PYTHON} -m photoshare_demo",
             shell=True,
             stdout=self._app_log,
             stderr=subprocess.STDOUT,
