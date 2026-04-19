@@ -16,3 +16,5 @@ COMMIT_MSG
 scripts/*/target/
 scripts/__pycache__/
 local-md/
+note.txt
+venues.txt
